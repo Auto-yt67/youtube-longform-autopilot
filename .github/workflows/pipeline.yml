@@ -1,0 +1,68 @@
+name: Car YouTube Pipeline
+
+on:
+  schedule:
+    - cron: "0 10 * * 1,4"
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Video topic"
+        required: false
+        default: ""
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install FFmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write YouTube client secrets
+        run: echo '${{ secrets.YOUTUBE_CLIENT_SECRETS }}' > client_secrets.json
+
+      - name: Write YouTube token
+        run: echo '${{ secrets.YOUTUBE_TOKEN_PICKLE_B64 }}' | base64 -d > token.pickle
+
+      - name: Pick topic
+        id: topic
+        run: |
+          if [ -n "${{ github.event.inputs.topic }}" ]; then
+            echo "topic=${{ github.event.inputs.topic }}" >> $GITHUB_OUTPUT
+          else
+            python generate_topics.py
+            TOPIC=$(python -c "
+          import json, random
+          with open('topic_ideas.json') as f:
+              topics = json.load(f)
+          t = random.choice(topics)
+          print(t['title'])
+          ")
+            echo "topic=$TOPIC" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python pipeline.py "${{ steps.topic.outputs.topic }}" --output output
+
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: video-output
+          path: output/final_video.mp4
+          retention-days: 7
