@@ -4,3 +4,4 @@ soundfile
 faster-whisper
 google-auth-oauthlib
 google-api-python-client
+pytz
