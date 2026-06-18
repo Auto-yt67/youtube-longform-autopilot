@@ -1,0 +1,12 @@
+output/
+*.pickle
+token.pickle
+client_secrets.json
+.env
+__pycache__/
+*.pyc
+*.wav
+*.mp4
+topic_ideas.json
+*.egg-info/
+.venv/
