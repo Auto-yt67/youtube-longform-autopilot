@@ -299,7 +299,14 @@ You MUST respond with ONLY valid JSON, no markdown, no preamble:
 
 Rules:
 - narration_excerpt must be exact substrings of the full narration
-- image_prompt: always white background, stickman art style
+- image_prompt: be LITERAL and SPECIFIC about what's physically on screen — name
+  the exact object/part, its position, what labels/arrows point to what, and what
+  action is happening. Do NOT write vague/moody/abstract prompts like "a car coming
+  to life" or "the journey begins" — instead write concrete things like
+  "a stickman mechanic pointing at a cutaway diagram of a four-stroke engine, with
+  arrows labeled INTAKE, COMPRESSION, COMBUSTION, EXHAUST pointing at each stage in order"
+- Every image_prompt must directly and literally depict what the matching
+  narration_excerpt is talking about — no metaphors, no symbolic imagery
 - Tags must include: cars, car education, automotive, car facts, car explained + specific topic tags
 - Title must use a proven viral formula (curiosity gap, numbers, superlatives)
 - Remember: narration must be AT LEAST {min_words} words and scenes must number AT LEAST {min_scenes}
