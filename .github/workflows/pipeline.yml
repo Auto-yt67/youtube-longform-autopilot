@@ -1,59 +1,67 @@
 name: Car YouTube Pipeline
+
 on:
   schedule:
-    - cron: "0 10 * * 1,4"
+    # Run daily at 7am UTC (3am EST) — pipeline picks optimal public time itself
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
-      topic:
-        description: "Video topic"
+      formula:
+        description: "Formula (grid_explainer/how_it_works/car_history/brand_history/part_history)"
         required: false
         default: ""
+      topic:
+        description: "Topic (leave blank for auto)"
+        required: false
+        default: ""
+
 jobs:
   generate-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install FFmpeg
-        run: sudo apt-get install -y ffmpeg
+        run: sudo apt-get install -y ffmpeg fonts-liberation
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
+
       - name: Write YouTube client secrets
         run: echo '${{ secrets.YOUTUBE_CLIENT_SECRETS }}' > client_secrets.json
+
       - name: Write YouTube token
         run: echo '${{ secrets.YOUTUBE_TOKEN_PICKLE_B64 }}' | base64 -d > token.pickle
-      - name: Pick topic
-        id: topic
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: |
-          if [ -n "${{ github.event.inputs.topic }}" ]; then
-            echo "topic=${{ github.event.inputs.topic }}" >> $GITHUB_OUTPUT
-          else
-            python generate_topics.py
-            TOPIC=$(python -c "
-          import json, random
-          with open('topic_ideas.json') as f:
-              topics = json.load(f)
-          t = random.choice(topics)
-          print(t['title'])
-          ")
-            echo "topic=$TOPIC" >> $GITHUB_OUTPUT
-          fi
+
       - name: Run pipeline
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          WAVESPEED_API_KEY: ${{ secrets.WAVESPEED_API_KEY }}
         run: |
-          python pipeline.py --topic "${{ steps.topic.outputs.topic }}" --output output
+          ARGS="--output output"
+          if [ -n "${{ github.event.inputs.formula }}" ]; then
+            ARGS="$ARGS --formula ${{ github.event.inputs.formula }}"
+          fi
+          if [ -n "${{ github.event.inputs.topic }}" ]; then
+            ARGS="$ARGS --topic ${{ github.event.inputs.topic }}"
+          fi
+          python pipeline.py $ARGS
+
       - name: Upload video artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: video-output
-          path: output/final_video.mp4
+          name: video-output-${{ github.run_number }}
+          path: |
+            output/final_video.mp4
+            output/thumbnail.png
+            output/script.json
           retention-days: 7
