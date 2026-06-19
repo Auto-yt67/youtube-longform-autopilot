@@ -207,6 +207,50 @@ def pick_formula_and_topic():
     
     return formula_key, topic
 
+def _sanitize_json_control_chars(raw: str) -> str:
+    """
+    LLMs sometimes emit literal control characters (raw newlines, tabs, etc.)
+    inside JSON string values instead of escaping them (\\n, \\t). Strict JSON
+    parsers reject this. This walks the raw text char-by-char, tracking
+    whether we're inside a string literal, and escapes any raw control
+    character (ASCII < 0x20) found inside a string so json.loads succeeds.
+    """
+    out = []
+    in_string = False
+    escaped = False
+    for ch in raw:
+        if in_string:
+            if escaped:
+                out.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                out.append(ch)
+                in_string = False
+                continue
+            if ord(ch) < 0x20:
+                # Escape raw control characters found inside a string
+                if ch == "\n":
+                    out.append("\\n")
+                elif ch == "\t":
+                    out.append("\\t")
+                elif ch == "\r":
+                    out.append("\\r")
+                else:
+                    out.append(f"\\u{ord(ch):04x}")
+                continue
+            out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    return "".join(out)
+
+
 def generate_script(formula_key=None, topic=None):
     """Generate a full script. If no formula/topic given, picks automatically."""
     if formula_key is None or topic is None:
@@ -256,6 +300,7 @@ Rules:
     raw = response.choices[0].message.content.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
+    raw = _sanitize_json_control_chars(raw)
 
     script = json.loads(raw)
     script["formula"] = formula_key
