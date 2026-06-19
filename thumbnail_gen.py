@@ -16,10 +16,10 @@ HEIGHT = 720
 
 THUMBNAIL_STYLE = (
     "YouTube thumbnail, high contrast, eye-catching, "
-    "simple bold stickman illustration, bright vivid background color, "
-    "black bold outlined stickman figures, flat design, "
-    "no text, dramatic composition, thumbnail style, "
-    "clean white space, bold colors, "
+    "bold thick black outline stickman illustration, "
+    "one or two flat accent colors used for emphasis, vivid background color, "
+    "flat 2D design, no text, dramatic composition, thumbnail style, "
+    "clean white space, consistent stickman character design, "
 )
 
 def generate_thumbnail_image(visual_prompt: str, output_path: str, seed: int = 99) -> bool:

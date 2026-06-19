@@ -19,7 +19,7 @@ def ensure_kokoro():
         return True
 
 
-def generate_voiceover(narration: str, output_path: str, voice: str = "af_heart", speed: float = 1.0):
+def generate_voiceover(narration: str, output_path: str, voice: str = "am_echo", speed: float = 1.0):
     """
     Generate voiceover audio from narration text using Kokoro TTS.
     

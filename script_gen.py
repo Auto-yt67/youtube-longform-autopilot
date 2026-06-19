@@ -17,6 +17,8 @@ FORMULAS = {
     "grid_explainer": {
         "name": "Grid Explainer",
         "description": "Every X Explained — show all items in a visual grid, then explain each one",
+        "min_scenes": 20,
+        "min_words": 1100,  # ~8 min at ~140 wpm
         "title_formulas": [
             "Every {topic} Explained in {N} Minutes",
             "Every Type of {topic} & How They Work",
@@ -34,6 +36,8 @@ FORMULAS = {
     "how_it_works": {
         "name": "How It Works",
         "description": "Deep dive on one car part or system with stickman diagrams",
+        "min_scenes": 15,
+        "min_words": 750,  # ~5-6 min at ~140 wpm
         "title_formulas": [
             "How Does a {topic} Actually Work?",
             "The {topic} Explained Simply",
@@ -52,6 +56,8 @@ FORMULAS = {
     "car_history": {
         "name": "Car History",
         "description": "Story of how cars or a car concept evolved over time",
+        "min_scenes": 18,
+        "min_words": 850,  # ~6 min at ~140 wpm
         "title_formulas": [
             "The History of {topic} (Nobody Tells You This)",
             "How {topic} Changed Everything",
@@ -69,6 +75,8 @@ FORMULAS = {
     "brand_history": {
         "name": "Brand History",
         "description": "Origin story and history of one car brand",
+        "min_scenes": 20,
+        "min_words": 1000,  # ~7 min at ~140 wpm
         "title_formulas": [
             "The Insane Story of How {brand} Started",
             "How {brand} Went From {start} to {end}",
@@ -85,6 +93,8 @@ FORMULAS = {
     "part_history": {
         "name": "Part History",
         "description": "How a specific car part was invented and evolved",
+        "min_scenes": 15,
+        "min_words": 750,  # ~5-6 min at ~140 wpm
         "title_formulas": [
             "Who Invented the {part}? (The Answer Is Surprising)",
             "The History of the {part} — From {old} to {new}",
@@ -258,10 +268,17 @@ def generate_script(formula_key=None, topic=None):
     
     formula = FORMULAS[formula_key]
     system_prompt = SYSTEM_PROMPTS[formula_key]
+    min_scenes = formula["min_scenes"]
+    min_words = formula["min_words"]
     
-    full_system = system_prompt + """
+    full_system = system_prompt + f"""
+HARD REQUIREMENT — DO NOT GO UNDER THIS: the "narration" field must contain
+AT LEAST {min_words} words, and the "scenes" array must contain AT LEAST
+{min_scenes} scene objects. This is a strict minimum, not a target — videos
+that come in short will be rejected. If you are unsure, write more, not less.
+
 You MUST respond with ONLY valid JSON, no markdown, no preamble:
-{
+{{
   "formula": "formula_key_here",
   "topic": "topic here",
   "title": "YouTube video title",
@@ -271,38 +288,74 @@ You MUST respond with ONLY valid JSON, no markdown, no preamble:
   "thumbnail_visual": "Description of what stickman illustration to show on thumbnail — dramatic, eye-catching",
   "narration": "The FULL narration as one continuous string. Natural speech, conversational, uses pauses with commas and ellipses.",
   "scenes": [
-    {
+    {{
       "id": 1,
       "narration_excerpt": "Exact sentence(s) from narration for this scene",
       "image_prompt": "Stickman illustration: white background, black outlines, simple labeled diagram. Describe exactly what to show.",
       "scene_description": "Brief note on what this scene covers"
-    }
+    }}
   ]
-}
+}}
 
 Rules:
 - narration_excerpt must be exact substrings of the full narration
 - image_prompt: always white background, stickman art style
 - Tags must include: cars, car education, automotive, car facts, car explained + specific topic tags
 - Title must use a proven viral formula (curiosity gap, numbers, superlatives)
+- Remember: narration must be AT LEAST {min_words} words and scenes must number AT LEAST {min_scenes}
 """
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": full_system},
-            {"role": "user", "content": f"Write a {formula['name']} script about: {topic}"}
-        ],
-        temperature=0.75,
-        max_tokens=6000,
-    )
+    max_attempts = 3
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        user_msg = f"Write a {formula['name']} script about: {topic}"
+        if attempt > 1:
+            user_msg += (
+                f"\n\nYour previous attempt was too short. You MUST write at least "
+                f"{min_words} words of narration and at least {min_scenes} scenes. "
+                f"Expand the explanation with more detail, examples, and sub-points."
+            )
 
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = _sanitize_json_control_chars(raw)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": full_system},
+                {"role": "user", "content": user_msg}
+            ],
+            temperature=0.7,
+            max_tokens=8000,
+        )
 
-    script = json.loads(raw)
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        raw = _sanitize_json_control_chars(raw)
+
+        try:
+            script = json.loads(raw)
+        except json.JSONDecodeError as e:
+            last_error = e
+            print(f"  Attempt {attempt}: JSON parse failed ({e}), retrying...")
+            continue
+
+        word_count = len(script.get("narration", "").split())
+        scene_count = len(script.get("scenes", []))
+
+        if word_count >= min_words and scene_count >= min_scenes:
+            script["formula"] = formula_key
+            script["topic"] = topic
+            return script
+
+        last_error = (
+            f"Too short: {word_count} words (need {min_words}), "
+            f"{scene_count} scenes (need {min_scenes})"
+        )
+        print(f"  Attempt {attempt}: {last_error}, retrying...")
+
+    # All attempts exhausted — return the last script anyway rather than
+    # crashing the pipeline, but flag it loudly so it's not silently short.
+    print(f"  WARNING: could not meet minimum length after {max_attempts} attempts "
+          f"({last_error}). Proceeding with shortest available script.")
     script["formula"] = formula_key
     script["topic"] = topic
     return script

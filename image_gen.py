@@ -13,12 +13,16 @@ from pathlib import Path
 POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
 
 # Style prefix appended to every image prompt for visual consistency
+# Matches channel branding: bold black outlines, 1-2 accent colors (not full color),
+# white background, diagram-first (not generic illustration)
 STYLE_PREFIX = (
-    "simple stickman educational illustration, white background, "
-    "black outline stick figures, minimal color accents, "
-    "clean diagram style, labeled with simple text, "
-    "flat 2D drawing, educational infographic style, "
-    "no shading no gradients, "
+    "bold thick black outline stickman illustration, white background, "
+    "exactly one or two flat accent colors used sparingly for emphasis "
+    "(e.g. red or blue highlights on key parts), everything else black and white, "
+    "clean technical diagram style with labeled arrows and callout lines pointing "
+    "to specific parts, simple geometric shapes, no shading, no gradients, "
+    "no photorealism, flat 2D vector look, educational infographic, "
+    "consistent stickman character design across all panels, "
 )
 
 # Image dimensions — 16:9 for YouTube
@@ -40,7 +44,7 @@ def build_url(prompt: str, seed: int = 42) -> str:
 
 
 def download_image(url: str, output_path: str, retries: int = 3) -> bool:
-    """Download image from Pollinations with retry logic."""
+    """Download image from Pollinations with retry logic, then verify/fix dimensions."""
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; CarYouTubePipeline/1.0)"
     }
@@ -50,12 +54,48 @@ def download_image(url: str, output_path: str, retries: int = 3) -> bool:
             with urllib.request.urlopen(req, timeout=60) as response:
                 with open(output_path, "wb") as f:
                     f.write(response.read())
+            _normalize_image_aspect(output_path)
             return True
         except Exception as e:
             print(f"    Attempt {attempt + 1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(3 * (attempt + 1))
     return False
+
+
+def _normalize_image_aspect(image_path: str):
+    """
+    Pollinations doesn't always return exactly WIDTHxHEIGHT, and some models
+    silently crop or distort the requested aspect ratio. This re-letterboxes
+    the actual downloaded image onto a correctly-sized white canvas instead
+    of letting a mismatched-aspect image get force-stretched later.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        import subprocess
+        subprocess.check_call(["pip", "install", "Pillow", "-q", "--break-system-packages"])
+        from PIL import Image
+
+    img = Image.open(image_path).convert("RGB")
+    if img.size == (WIDTH, HEIGHT):
+        return  # already correct, nothing to do
+
+    # Scale to fit within target box, preserving aspect ratio (no stretch)
+    src_ratio = img.width / img.height
+    target_ratio = WIDTH / HEIGHT
+    if src_ratio > target_ratio:
+        new_w = WIDTH
+        new_h = round(WIDTH / src_ratio)
+    else:
+        new_h = HEIGHT
+        new_w = round(HEIGHT * src_ratio)
+
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), (255, 255, 255))
+    offset = ((WIDTH - new_w) // 2, (HEIGHT - new_h) // 2)
+    canvas.paste(resized, offset)
+    canvas.save(image_path)
 
 
 def generate_images(scenes: list, output_dir: str) -> list:
