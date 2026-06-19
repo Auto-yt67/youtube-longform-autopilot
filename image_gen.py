@@ -20,12 +20,16 @@ HEIGHT = 720
 # Style prefix appended to every image prompt for visual consistency.
 # Flux follows this far more reliably than Pollinations did.
 STYLE_PREFIX = (
-    "Simple flat 2D stickman educational diagram illustration. "
+    "Simple flat 2D minimalist stickman educational diagram illustration. "
     "Bold thick black outlines on a plain white background. "
     "Stick-figure people with circular heads and simple line bodies, "
-    "minimalist geometric style like a whiteboard explainer video. "
-    "Use exactly one or two flat accent colors (red or blue) to highlight "
-    "key parts being discussed, everything else black and white line art. "
+    "minimalist geometric style like a whiteboard explainer video — all "
+    "stick-figure people, labels, and arrows stay strictly black-and-white "
+    "line art, no color on people. "
+    "Reserve flat, natural color ONLY for car parts, mechanical components, "
+    "or background context where it helps comprehension — e.g. a red engine "
+    "block, blue coolant lines, a car's actual body color, yellow warning "
+    "icons — applied as flat color fills, not realistic shading. "
     "Clean labeled arrows and callout lines pointing to specific objects. "
     "No shading, no gradients, no photorealism, no 3D rendering, "
     "no textures — flat vector look only. Scene: "

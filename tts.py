@@ -19,7 +19,7 @@ def ensure_kokoro():
         return True
 
 
-def generate_voiceover(narration: str, output_path: str, voice: str = "am_echo", speed: float = 1.0):
+def generate_voiceover(narration: str, output_path: str, voice: str = "am_michael", speed: float = 1.5):
     """
     Generate voiceover audio from narration text using Kokoro TTS.
     
@@ -27,10 +27,11 @@ def generate_voiceover(narration: str, output_path: str, voice: str = "am_echo",
         narration: Full narration text
         output_path: Path to save the WAV file
         voice: Kokoro voice ID. Good options:
-               'af_heart' (American female, warm)
-               'am_echo'  (American male)
-               'bf_emma'  (British female)
-        speed: Speaking speed (0.5 - 2.0, default 1.0)
+               'am_michael' (American male, deep, documentary-style — default)
+               'am_onyx'    (American male, deep, alternate option)
+               'af_heart'   (American female, warm)
+               'bf_emma'    (British female)
+        speed: Speaking speed (0.5 - 2.0). Default 1.5 = 50% faster than normal.
     """
     ensure_kokoro()
 

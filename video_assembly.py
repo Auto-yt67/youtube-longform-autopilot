@@ -15,6 +15,7 @@ FPS = 30
 WIDTH = 1280
 HEIGHT = 720
 TRANSITION_DURATION = 0.3  # seconds crossfade between scenes
+LONG_HOLD_SECONDS = 6.0    # scenes held longer than this get a slow Ken Burns zoom
 
 
 def assemble_video(
@@ -57,12 +58,21 @@ def assemble_video(
     # Scale each input
     for i, timing in enumerate(scene_timings):
         dur = max(timing["duration"], 0.5)  # minimum 0.5s per scene
-        filter_parts.append(
+        chain = (
             f"[{i}:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
             f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:white,"
-            f"setsar=1,fps={FPS},"
-            f"trim=duration={dur + TRANSITION_DURATION}[v{i}]"
+            f"setsar=1,fps={FPS}"
         )
+        if dur > LONG_HOLD_SECONDS:
+            # Slow, subtle zoom-in so long static holds don't feel frozen
+            # while the narrator keeps talking over one image.
+            chain += (
+                f",zoompan=z='min(zoom+0.0006,1.12)':"
+                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"s={WIDTH}x{HEIGHT}:fps={FPS}"
+            )
+        chain += f",trim=duration={dur + TRANSITION_DURATION}[v{i}]"
+        filter_parts.append(chain)
 
     # Chain xfade transitions
     if len(scene_timings) == 1:
@@ -103,7 +113,10 @@ def assemble_video(
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-r", str(FPS),
             "-c:a", "aac",
+            "-ar", "48000",
             "-b:a", "192k",
             "-shortest",
             "-movflags", "+faststart",

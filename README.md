@@ -133,8 +133,9 @@ To force a fresh run, delete the output directory or use a new `--output` path.
 
 ### Change voice
 Edit `tts.py` → `voice` parameter. Options:
-- `af_heart` — American female, warm (default)
-- `am_echo` — American male
+- `am_michael` — American male, deep/documentary-style (default)
+- `am_onyx` — American male, deep, alternate option
+- `af_heart` — American female, warm
 - `bf_emma` — British female
 
 ### Change image style
