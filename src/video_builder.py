@@ -87,8 +87,8 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict, ou
     final = concatenate_videoclips(clips, method="compose")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     final.write_videofile(
-        str(out_path), fps=30, codec="libx264", audio_codec="aac",
-        threads=4, preset="medium",
+        str(out_path), fps=24, codec="libx264", audio_codec="aac",
+        threads=4, preset="veryfast",
     )
     return out_path
 
