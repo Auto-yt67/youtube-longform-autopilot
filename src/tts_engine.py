@@ -17,12 +17,20 @@ from pathlib import Path
 
 VOICE = "en_US-lessac-medium"  # natural-sounding free voice; swap for others as desired
 
+# Must match the --download-dir used in the GitHub Actions workflow's
+# "Download Piper voice model" step. Using a fixed absolute path (rather than
+# relying on the current working directory) means TTS works the same whether
+# it's invoked from src/, the repo root, or anywhere else.
+VOICE_DIR = Path.home() / ".local" / "share" / "piper-voices"
+VOICE_MODEL_PATH = VOICE_DIR / f"{VOICE}.onnx"
+
 
 def synthesize(text: str, out_path: Path):
     """Synthesize a block of text to a wav file using Piper."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    model_arg = str(VOICE_MODEL_PATH) if VOICE_MODEL_PATH.exists() else VOICE
     subprocess.run(
-        ["piper", "--model", VOICE, "--output_file", str(out_path)],
+        ["piper", "--model", model_arg, "--output_file", str(out_path)],
         input=text.encode("utf-8"),
         check=True,
     )
