@@ -1,0 +1,6 @@
+requests>=2.31
+moviepy>=1.0.3
+Pillow>=10.0
+piper-tts>=1.2.0
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.100
