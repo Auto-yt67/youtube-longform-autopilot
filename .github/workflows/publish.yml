@@ -34,6 +34,13 @@ jobs:
           python -m piper.download_voices --download-dir "$HOME/.local/share/piper-voices" en_US-norman-medium
           ls -la "$HOME/.local/share/piper-voices"
 
+      - name: Download display font
+        run: |
+          mkdir -p src/assets/fonts
+          curl -sL -o src/assets/fonts/LuckiestGuy-Regular.ttf \
+            https://github.com/google/fonts/raw/main/apache/luckiestguy/LuckiestGuy-Regular.ttf
+          ls -la src/assets/fonts
+
       - name: Run pipeline
         working-directory: src
         env:
