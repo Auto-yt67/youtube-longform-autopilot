@@ -4,6 +4,11 @@ Writes the full narration script for a topic, matching the "catalog" formula:
 cold open per item (no transition fluff), tight self-contained story arc,
 ~120-220 words per segment. Also produces an image search query per segment
 for the image-sourcing stage.
+
+The INTRO is generated separately (generate_intro) and deliberately LAST -
+after top-up segments are added and after image sourcing has dropped any
+segments it couldn't find licensed images for. Writing it earlier would mean
+previewing cars that never appear in the finished video.
 """
 
 import os
@@ -69,6 +74,43 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
 }}
 """
 
+INTRO_PROMPT = """Write the opening narration for a YouTube video titled "{title}"
+(theme: {theme}).
+
+This intro plays over a GRID showing all {item_count} items at once, before the
+video zooms into the first one. The narration must match what's on screen.
+
+Rules:
+- 90-130 words. This is the intro only - not the first item.
+- Open with a hook tied to the theme. No "welcome back to the channel," no
+  "in today's video," no channel-intro cliches.
+- Tell the viewer what the video covers and roughly how it's structured
+  (a run through {item_count} of these, one at a time).
+- You may name 2-3 of the most recognizable items below as a teaser, but do
+  NOT list all of them and do NOT describe them in detail - that's what the
+  rest of the video is for.
+- Plain, punchy, factual. Same voice as the rest of the script.
+- End on a line that leads into the first item without naming it.
+
+The items covered, in order:
+{item_names}
+
+Respond with ONLY valid JSON, no markdown fences, no preamble:
+{{
+  "intro": "the intro narration text"
+}}
+"""
+
+
+def _strip_fences(content: str) -> str:
+    """Groq sometimes wraps JSON in markdown fences despite instructions."""
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        content = content.split("\n", 1)[1] if "\n" in content else content
+        content = content.rsplit("```", 1)[0]
+    return content
+
 
 def generate_script(topic: dict) -> dict:
     api_key = os.environ["GROQ_API_KEY"]
@@ -87,13 +129,7 @@ def generate_script(topic: dict) -> dict:
         },
         timeout=120,
     )
-    content = resp.json()["choices"][0]["message"]["content"].strip()
-
-    if content.startswith("```"):
-        content = content.strip("`")
-        content = content.split("\n", 1)[1] if "\n" in content else content
-        content = content.rsplit("```", 1)[0]
-
+    content = _strip_fences(resp.json()["choices"][0]["message"]["content"])
     script = json.loads(content)
     return script
 
@@ -123,21 +159,59 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
         },
         timeout=90,
     )
-    content = resp.json()["choices"][0]["message"]["content"].strip()
-
-    if content.startswith("```"):
-        content = content.strip("`")
-        content = content.split("\n", 1)[1] if "\n" in content else content
-        content = content.rsplit("```", 1)[0]
-
+    content = _strip_fences(resp.json()["choices"][0]["message"]["content"])
     result = json.loads(content)
     return result["segments"]
 
 
+def generate_intro(topic: dict, final_names: list) -> str:
+    """
+    Write the intro narration that plays over the grid.
+
+    IMPORTANT: call this LAST - after top-up segments have been added AND
+    after image sourcing has dropped any segments with no licensed images.
+    `final_names` must be the names that actually make it into the video,
+    in the order they appear, or the intro will promise items the viewer
+    never sees.
+
+    Falls back to a generic intro if the API call fails, so a bad Groq
+    response can't take down the whole run.
+    """
+    api_key = os.environ["GROQ_API_KEY"]
+    prompt = INTRO_PROMPT.format(
+        title=topic["title"],
+        theme=topic["theme"],
+        item_count=len(final_names),
+        item_names="\n".join(f"- {n}" for n in final_names),
+    )
+
+    try:
+        resp = groq_post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json_body={
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 1000,
+            },
+            timeout=60,
+        )
+        content = _strip_fences(resp.json()["choices"][0]["message"]["content"])
+        return json.loads(content)["intro"]
+    except Exception as e:
+        print(f"  ! Intro generation failed ({e}) - using fallback intro")
+        return (
+            f"{topic['title']}. We're running through {len(final_names)} of them, "
+            f"one at a time. Here's the first."
+        )
+
+
 if __name__ == "__main__":
-    import sys
     from topic_generator import generate_topic
 
     topic = generate_topic()
     script = generate_script(topic)
+    names = [s["name"] for s in script["segments"]]
+    script["intro"] = generate_intro(topic, names)
     print(json.dumps(script, indent=2))
