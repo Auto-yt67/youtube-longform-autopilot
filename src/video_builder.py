@@ -8,6 +8,7 @@ are stretched/cut to match its voiceover duration exactly.
 
 from pathlib import Path
 from PIL import Image
+import numpy as np
 
 # moviepy 1.0.3 calls PIL.Image.ANTIALIAS internally, which was removed in
 # Pillow 10+ (renamed to Image.LANCZOS). Patch it back in rather than pinning
@@ -22,13 +23,25 @@ from moviepy.editor import (
 W, H = 1920, 1080
 
 
+def _load_rgb_clip(image_path: str) -> ImageClip:
+    """
+    Load an image as an ImageClip, forcing RGB. Some source photos (older
+    black-and-white press photos in particular) come through as single-channel
+    grayscale, which crashes moviepy's compositor when mixed with RGB clips -
+    it expects every frame to have 3 color channels. Converting through PIL
+    first guarantees a consistent 3-channel array regardless of the source.
+    """
+    img = Image.open(image_path).convert("RGB")
+    return ImageClip(np.array(img))
+
+
 def _cover_fit_clip(image_path: str, duration: float) -> ImageClip:
     """
     Static clip: scale the image to fully cover the WxH frame (no letterboxing,
     no distortion), center-crop any overflow, and hold it still for the full
     duration. No animation - a plain, fast-to-render still frame.
     """
-    clip = ImageClip(image_path)
+    clip = _load_rgb_clip(image_path)
     img_w, img_h = clip.size
     scale = max(W / img_w, H / img_h)
     clip = clip.resize(scale)
