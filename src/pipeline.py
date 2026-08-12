@@ -46,7 +46,11 @@ def run():
     representative_images = []
     for i, seg in enumerate(segments):
         out_dir = WORKDIR / "images" / f"seg_{i:02d}"
-        paths = download_images(seg["image_query"], out_dir, limit=4)
+        try:
+            paths = download_images(seg["image_query"], out_dir, limit=4)
+        except Exception as e:
+            print(f"  ! unexpected failure sourcing images for '{seg['name']}' ({e}) - treating as 0 images")
+            paths = []
         if not paths:
             print(f"  ! No clear-license images found for '{seg['name']}' "
                   f"(query: {seg['image_query']}) - segment will be skipped")

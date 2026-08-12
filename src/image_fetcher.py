@@ -6,11 +6,26 @@ no login required for reads. Filters to only fully clear licenses
 """
 
 import re
+import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from pathlib import Path
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 USER_AGENT = "CarProfessorPipeline/1.0 (educational YouTube automation; contact: set-your-email-here)"
+REQUEST_DELAY_SECONDS = 1.0  # be a good citizen - avoid tripping Wikimedia's rate limiter
+
+_session = requests.Session()
+_session.headers.update({"User-Agent": USER_AGENT})
+_retry = Retry(
+    total=5,
+    backoff_factor=3,  # 3s, 6s, 12s, 24s, 48s - gives 429s real time to clear
+    status_forcelist=[429, 502, 503, 504],
+    respect_retry_after_header=True,
+    allowed_methods=["GET"],
+)
+_session.mount("https://", HTTPAdapter(max_retries=_retry))
 
 # Licenses we consider safe to reuse freely
 ALLOWED_LICENSE_PATTERNS = [
@@ -32,23 +47,28 @@ def _is_license_clear(extmetadata: dict) -> bool:
 
 def search_images(query: str, limit: int = 6) -> list:
     """Search Commons for images matching a query, return license-clear results."""
-    search_resp = requests.get(
-        COMMONS_API,
-        params={
-            "action": "query",
-            "format": "json",
-            "generator": "search",
-            "gsrsearch": f"{query} filetype:bitmap",
-            "gsrnamespace": 6,  # File namespace
-            "gsrlimit": limit * 3,  # over-fetch since some will be filtered out
-            "prop": "imageinfo",
-            "iiprop": "url|extmetadata",
-            "iiurlwidth": 1600,
-        },
-        headers={"User-Agent": USER_AGENT},
-        timeout=30,
-    )
-    search_resp.raise_for_status()
+    time.sleep(REQUEST_DELAY_SECONDS)  # self-throttle before every search call
+    try:
+        search_resp = _session.get(
+            COMMONS_API,
+            params={
+                "action": "query",
+                "format": "json",
+                "generator": "search",
+                "gsrsearch": f"{query} filetype:bitmap",
+                "gsrnamespace": 6,  # File namespace
+                "gsrlimit": limit * 3,  # over-fetch since some will be filtered out
+                "prop": "imageinfo",
+                "iiprop": "url|extmetadata",
+                "iiurlwidth": 1600,
+            },
+            timeout=30,
+        )
+        search_resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"  ! search failed for '{query}' after retries ({e}) - skipping this query")
+        return []
+
     pages = search_resp.json().get("query", {}).get("pages", {})
 
     results = []
@@ -73,14 +93,21 @@ def search_images(query: str, limit: int = 6) -> list:
 
 
 def download_images(query: str, out_dir: Path, limit: int = 4) -> list:
-    """Search + download images for a segment. Returns list of local file paths."""
+    """Search + download images for a segment. Returns list of local file paths.
+    Never raises - a failed search or download just means fewer (or zero) images
+    for this segment, not a crashed pipeline."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    images = search_images(query, limit=limit)
-    paths = []
+    try:
+        images = search_images(query, limit=limit)
+    except Exception as e:
+        print(f"  ! unexpected error searching '{query}' ({e}) - skipping this segment's images")
+        return []
 
+    paths = []
     for i, img in enumerate(images):
+        time.sleep(REQUEST_DELAY_SECONDS)  # self-throttle before every download too
         try:
-            resp = requests.get(img["url"], headers={"User-Agent": USER_AGENT}, timeout=30)
+            resp = _session.get(img["url"], timeout=30)
             resp.raise_for_status()
             ext = img["url"].split(".")[-1].split("?")[0][:4]
             out_path = out_dir / f"{i:02d}.{ext}"
