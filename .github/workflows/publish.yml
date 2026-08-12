@@ -29,7 +29,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Download Piper voice model
-        run: python -m piper.download_voices en_US-lessac-medium
+        run: |
+          mkdir -p "$HOME/.local/share/piper-voices"
+          python -m piper.download_voices --download-dir "$HOME/.local/share/piper-voices" en_US-lessac-medium
 
       - name: Run pipeline
         working-directory: src
