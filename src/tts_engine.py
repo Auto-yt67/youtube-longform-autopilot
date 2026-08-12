@@ -8,14 +8,20 @@ fast enough for CI runners.
 Setup (handled in the GitHub Actions workflow, or run manually):
     pip install piper-tts
     # downloads a voice model on first use, or pre-fetch with:
-    python -m piper.download_voices en_US-lessac-medium
+    python -m piper.download_voices en_US-norman-medium
 """
 
 import subprocess
 import wave
 from pathlib import Path
 
-VOICE = "en_US-lessac-medium"  # natural-sounding free voice; swap for others as desired
+VOICE = "en_US-norman-medium"  # male narration voice
+
+# Playback speed. Piper's length_scale is INVERSE to speed:
+#   1.0  = normal
+#   0.80 = 1.25x faster  <-- current setting
+#   0.67 = 1.5x faster
+LENGTH_SCALE = 0.80
 
 # Must match the --download-dir used in the GitHub Actions workflow's
 # "Download Piper voice model" step. Using a fixed absolute path (rather than
@@ -30,7 +36,12 @@ def synthesize(text: str, out_path: Path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     model_arg = str(VOICE_MODEL_PATH) if VOICE_MODEL_PATH.exists() else VOICE
     subprocess.run(
-        ["piper", "--model", model_arg, "--output_file", str(out_path)],
+        [
+            "piper",
+            "--model", model_arg,
+            "--length_scale", str(LENGTH_SCALE),
+            "--output_file", str(out_path),
+        ],
         input=text.encode("utf-8"),
         check=True,
     )
