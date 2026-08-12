@@ -19,7 +19,7 @@ from script_writer import (
 )
 from image_fetcher import download_images
 from tts_engine import synthesize_segments, synthesize, get_wav_duration
-from video_builder import build_video
+from video_builder import build_video, prepare_cutouts
 from thumbnail_generator import build_thumbnail
 from youtube_upload import upload_to_youtube
 
@@ -136,9 +136,16 @@ def run():
 
     # 5. Video + thumbnail
     print("\n[5/6] Assembling video...")
+
+    # Cut out the cars once here rather than inside both the video and the
+    # thumbnail builders - each cutout costs ~2s and both need the same set.
+    print("  Selecting and cutting out subjects...")
+    cutouts = prepare_cutouts([s["name"] for s in segments], images_by_segment)
+    print(f"  {sum(c is not None for c in cutouts)}/{len(cutouts)} usable cutouts")
+
     video_path = WORKDIR / "final_video.mp4"
     build_video(segments, audio_results, images_by_segment, video_path,
-                intro_audio=intro_audio, title=script["title"])
+                intro_audio=intro_audio, title=script["title"], cutouts=cutouts)
 
     thumb_path = WORKDIR / "thumbnail.png"
     accent_word = pick_accent_word(script["title"])
@@ -149,6 +156,7 @@ def run():
         script["title"],
         thumb_path,
         accent_word=accent_word,
+        cutouts=cutouts,
     )
     print(f"  Video: {video_path}")
     print(f"  Thumbnail: {thumb_path}")

@@ -49,6 +49,13 @@ BG_COLOR = (255, 255, 255)
 TEXT_COLOR = (17, 17, 17)
 RING_COLOR = (17, 17, 17)
 
+# Solid backdrop behind each cut-out car in the grid circles.
+CIRCLE_BG = (238, 234, 226)
+
+# How many of a segment's photos to test for a clean cutout. Each costs
+# ~2s, so testing all 4 across 18 segments adds ~2.5 min to a run.
+CUTOUT_CANDIDATES = 3
+
 # Font search order. Drop a thick display font (Luckiest Guy, Bangers, Fredoka
 # One - all free) at assets/fonts/ to get the poster look; DejaVu Bold is the
 # fallback so the pipeline never hard-fails on a missing font.
@@ -120,10 +127,57 @@ def _circle_thumb(image_path: str, diameter: int) -> tuple:
     return img, mask
 
 
-def _build_grid(names: list, rep_images: list, title: str):
+def _circle_from_rgba(rgba, diameter: int, bg) -> tuple:
+    """Same as _circle_thumb but from an already-cut-out subject."""
+    from cutout import on_solid
+    img = on_solid(rgba, diameter, bg=bg)
+    mask = Image.new("L", (diameter, diameter), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, diameter - 1, diameter - 1), fill=255)
+    return img, mask
+
+
+def prepare_cutouts(names: list, images_by_segment: dict) -> list:
+    """
+    Pick the best-framed photo per segment and cut its background out.
+
+    Returns a list aligned to `names`, each entry either an RGBA cutout or
+    None. None means no candidate scored well enough, and the grid falls
+    back to a plain circle crop of the representative photo - a slightly
+    busy circle beats a mangled cutout.
+
+    Called once per run and reused for both the grid and the thumbnail,
+    since each cutout costs ~2s.
+    """
+    try:
+        from cutout import best_cutout
+    except ImportError as e:
+        print(f"  ! rembg unavailable ({e}) - using plain photo crops")
+        return [None] * len(names)
+
+    results = []
+    for i, name in enumerate(names):
+        candidates = images_by_segment.get(i, [])[:CUTOUT_CANDIDATES]
+        if not candidates:
+            results.append(None)
+            continue
+        print(f"    {name}:")
+        rgba, path, score = best_cutout(candidates)
+        if rgba is None:
+            print(f"      -> no usable cutout (best {score:.2f}), using photo crop")
+        else:
+            print(f"      -> chose {Path(path).name} ({score:.2f})")
+        results.append(rgba)
+    return results
+
+
+def _build_grid(names: list, rep_images: list, title: str, cutouts: list = None):
     """
     Render the full grid at GWxGH. Returns (grid_image, cell_boxes) where each
     cell box is the 16:9 region to zoom into for that item.
+
+    `cutouts` is an optional list aligned to `names` of background-removed
+    RGBA subjects. Where an entry is present the car is drawn on a solid
+    backdrop; where it's None the raw photo is circle-cropped instead.
     """
     canvas = Image.new("RGB", (GW, GH), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
@@ -161,10 +215,15 @@ def _build_grid(names: list, rep_images: list, title: str):
         cx = margin + cell_w * (col + 0.5)
         cy = grid_top + cell_h * row
 
-        # circle image
+        # circle image - cut-out car on a solid backdrop where we have one,
+        # otherwise a plain crop of the source photo
         img_path = rep_images[i] if i < len(rep_images) else None
+        rgba = cutouts[i] if cutouts and i < len(cutouts) else None
         circle_top = cy + (cell_h - label_h - diameter) / 2
-        if img_path:
+        if rgba is not None:
+            thumb, mask = _circle_from_rgba(rgba, diameter, CIRCLE_BG)
+            canvas.paste(thumb, (int(cx - diameter / 2), int(circle_top)), mask)
+        elif img_path:
             thumb, mask = _circle_thumb(img_path, diameter)
             canvas.paste(thumb, (int(cx - diameter / 2), int(circle_top)), mask)
         draw.ellipse(
@@ -279,13 +338,15 @@ def _build_photo_run(image_paths: list, duration: float):
 # -------------------------------------------------------------------- build
 
 def build_video(segments: list, audio_results: list, images_by_segment: dict,
-                out_path: Path, intro_audio: dict = None, title: str = None):
+                out_path: Path, intro_audio: dict = None, title: str = None,
+                cutouts: list = None):
     """
     segments: script segments (list of {name, script, image_query})
     audio_results: from tts_engine.synthesize_segments (list of {name, wav_path, duration})
     images_by_segment: {segment_index: [local image paths]}
     intro_audio: {name, wav_path, duration} for the grid intro, or None
     title: video title, drawn across the top of the grid
+    cutouts: background-removed subjects from prepare_cutouts(), or None
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frames_dir = out_path.parent / "zoom_frames"
@@ -297,7 +358,7 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict,
     ]
 
     print("  Building grid...")
-    grid_img, cell_boxes = _build_grid(names, rep_images, title or "")
+    grid_img, cell_boxes = _build_grid(names, rep_images, title or "", cutouts)
     full_box = (0, 0, GW, GH)
 
     grid_still_path = out_path.parent / "grid.jpg"

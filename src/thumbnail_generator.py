@@ -70,25 +70,29 @@ def _draw_accent_title(canvas: Image.Image, title: str, accent_word: str = None)
 
 
 def build_thumbnail(item_names: list, image_paths: list, title: str, out_path: Path,
-                    accent_word: str = None, max_items: int = MAX_THUMB_ITEMS):
+                    accent_word: str = None, cutouts: list = None,
+                    max_items: int = MAX_THUMB_ITEMS):
     """
     item_names: list of segment names (e.g. car names)
     image_paths: matching list of one representative image path per item
+    cutouts: background-removed subjects from video_builder.prepare_cutouts()
     """
-    items = [
-        (n, p) for n, p in zip(item_names, image_paths)
+    paired = [
+        (n, p, cutouts[i] if cutouts and i < len(cutouts) else None)
+        for i, (n, p) in enumerate(zip(item_names, image_paths))
         if p and Path(p).exists()
     ][:max_items]
 
-    if not items:
+    if not paired:
         raise ValueError("No usable images for the thumbnail")
 
-    names = [n for n, _ in items]
-    images = [p for _, p in items]
+    names = [n for n, _, _ in paired]
+    images = [p for _, p, _ in paired]
+    cuts = [c for _, _, c in paired]
 
     # Build with an empty title so the top band is reserved but blank, then
     # draw the accented title into it ourselves.
-    canvas, _ = _build_grid(names, images, "")
+    canvas, _ = _build_grid(names, images, "", cuts)
     _draw_accent_title(canvas, title, accent_word)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
