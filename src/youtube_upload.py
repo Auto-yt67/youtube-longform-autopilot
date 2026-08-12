@@ -28,6 +28,7 @@ import os
 import json
 import base64
 import pickle
+import re
 import subprocess
 import sys
 import argparse
@@ -44,13 +45,25 @@ TOKEN_FILE = Path("token.pickle")
 CLIENT_SECRETS_FILE = Path(os.environ.get("YOUTUBE_CLIENT_SECRETS_PATH", "client_secrets.json"))
 
 
+def _clean_base64(raw: str) -> str:
+    """
+    Strip anything that isn't a valid base64 character. Copy-pasting a long
+    base64 string through different clipboard tools/editors can introduce
+    stray invisible characters (BOMs, smart-formatting artifacts) that
+    base64.b64decode rejects outright since it requires pure ASCII. This
+    keeps only the actual base64 alphabet, so a single injected character
+    doesn't take down the whole decode.
+    """
+    return re.sub(r"[^A-Za-z0-9+/=]", "", raw)
+
+
 def _maybe_b64_decode(raw: str) -> bytes:
     """Accept either raw JSON text or base64-encoded content, whichever was stored."""
     raw = raw.strip()
     if raw.startswith("{"):
         return raw.encode("utf-8")
     try:
-        return base64.b64decode(raw)
+        return base64.b64decode(_clean_base64(raw))
     except Exception:
         return raw.encode("utf-8")
 
@@ -64,7 +77,7 @@ def _materialize_ci_secrets():
 
     token_raw = os.environ.get("YOUTUBE_TOKEN_PICKLE_B64") or os.environ.get("YOUTUBE_TOKEN_B64")
     if token_raw and not TOKEN_FILE.exists():
-        TOKEN_FILE.write_bytes(base64.b64decode(token_raw.strip()))
+        TOKEN_FILE.write_bytes(base64.b64decode(_clean_base64(token_raw.strip())))
 
 
 def ensure_google_libs():
