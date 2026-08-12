@@ -1,77 +1,96 @@
 """
 Stage 5b: Thumbnail generation.
-Builds a grid-of-circles thumbnail (image + bold label per item) matching
-the reference style you shared - a quick visual index of everything covered.
+
+Reuses the exact grid renderer from video_builder so the thumbnail and the
+video's opening shot are the same design - circles, display font, two-line
+labels. The only differences are thumbnail-specific: the item list is capped
+so cells stay legible at YouTube's small preview size, and the title gets a
+red accent word for contrast.
 """
 
+import math
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+from PIL import Image, ImageDraw
+
+from video_builder import _build_grid, _font, GW, GH
 
 THUMB_W, THUMB_H = 1280, 720
-FONT_PATH_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # present on Ubuntu runners
+
+# YouTube renders thumbnails as small as ~210px wide in sidebars. Past roughly
+# a dozen cells the circles and labels turn to mush, so the thumbnail shows a
+# subset even when the video covers more items.
+MAX_THUMB_ITEMS = 12
+
+ACCENT_COLOR = (214, 26, 26)
+TEXT_COLOR = (17, 17, 17)
 
 
-def _circle_crop(img_path: str, size: int) -> Image.Image:
-    img = Image.open(img_path).convert("RGB")
-    img = ImageOps.fit(img, (size, size), Image.LANCZOS)
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, size, size), fill=255)
-    out = Image.new("RGBA", (size, size))
-    out.paste(img, (0, 0), mask)
-    return out
+def _draw_accent_title(canvas: Image.Image, title: str, accent_word: str = None):
+    """
+    Draw the title across the reserved top band, with one word in red.
+    `accent_word` comes from the model (script_writer.pick_accent_word); if it
+    isn't supplied or doesn't match anything in the title, the longest word is
+    used so there's always exactly one word in red.
+    """
+    draw = ImageDraw.Draw(canvas)
+    margin = int(GW * 0.03)
+    title_h = int(GH * 0.16)
+    words = title.upper().split()
+    if not words:
+        return
+
+    accent_idx = None
+    if accent_word:
+        target = accent_word.strip(".,:!?-").upper()
+        for i, word in enumerate(words):
+            if word.strip(".,:!?-") == target:
+                accent_idx = i
+                break
+    if accent_idx is None:
+        accent_idx = max(range(len(words)), key=lambda i: len(words[i]))
+
+    size = int(title_h * 0.72)
+    while size > 30:
+        font = _font(size)
+        if draw.textlength(" ".join(words), font=font) <= GW - 2 * margin:
+            break
+        size -= 6
+    font = _font(size)
+
+    total_w = draw.textlength(" ".join(words), font=font)
+    space_w = draw.textlength(" ", font=font)
+    x = (GW - total_w) / 2
+    y = margin
+
+    for i, word in enumerate(words):
+        color = ACCENT_COLOR if i == accent_idx else TEXT_COLOR
+        draw.text((x, y), word, font=font, fill=color)
+        x += draw.textlength(word, font=font) + space_w
 
 
-def _label(draw: ImageDraw.Draw, text: str, cx: int, top: int, max_width: int, font_size: int = 26):
-    font = ImageFont.truetype(FONT_PATH_BOLD, font_size)
-    words = text.upper().split()
-    lines, line = [], ""
-    for w in words:
-        test = f"{line} {w}".strip()
-        if draw.textlength(test, font=font) > max_width and line:
-            lines.append(line)
-            line = w
-        else:
-            line = test
-    lines.append(line)
-
-    y = top
-    for line in lines:
-        w = draw.textlength(line, font=font)
-        x = cx - w / 2
-        # simple black outline for readability over any image
-        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
-            draw.text((x + dx, y + dy), line, font=font, fill="black")
-        draw.text((x, y), line, font=font, fill="white")
-        y += font_size + 4
-
-
-def build_thumbnail(item_names: list, image_paths: list, title: str, out_path: Path, max_items: int = 15):
+def build_thumbnail(item_names: list, image_paths: list, title: str, out_path: Path,
+                    accent_word: str = None, max_items: int = MAX_THUMB_ITEMS):
     """
     item_names: list of segment names (e.g. car names)
     image_paths: matching list of one representative image path per item
     """
-    canvas = Image.new("RGB", (THUMB_W, THUMB_H), "white")
-    draw = ImageDraw.Draw(canvas)
+    items = [
+        (n, p) for n, p in zip(item_names, image_paths)
+        if p and Path(p).exists()
+    ][:max_items]
 
-    items = list(zip(item_names, image_paths))[:max_items]
-    cols = 5
-    rows = (len(items) + cols - 1) // cols
-    cell_w = THUMB_W // cols
-    cell_h = THUMB_H // rows
-    circle_size = int(min(cell_w, cell_h) * 0.55)
+    if not items:
+        raise ValueError("No usable images for the thumbnail")
 
-    for idx, (name, img_path) in enumerate(items):
-        col, row = idx % cols, idx // cols
-        cx = col * cell_w + cell_w // 2
-        cy = row * cell_h + int(cell_h * 0.32)
+    names = [n for n, _ in items]
+    images = [p for _, p in items]
 
-        if img_path and Path(img_path).exists():
-            circle = _circle_crop(img_path, circle_size)
-            canvas.paste(circle, (cx - circle_size // 2, cy - circle_size // 2), circle)
-
-        _label(draw, name, cx, cy + circle_size // 2 + 8, cell_w - 20)
+    # Build with an empty title so the top band is reserved but blank, then
+    # draw the accented title into it ourselves.
+    canvas, _ = _build_grid(names, images, "")
+    _draw_accent_title(canvas, title, accent_word)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(out_path, quality=92)
+    canvas.resize((THUMB_W, THUMB_H), Image.LANCZOS).save(out_path, quality=92)
     return out_path

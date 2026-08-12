@@ -14,7 +14,9 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 
 from topic_generator import generate_topic, save_used_topic
-from script_writer import generate_script, generate_additional_segments, generate_intro
+from script_writer import (
+    generate_script, generate_additional_segments, generate_intro, pick_accent_word
+)
 from image_fetcher import download_images
 from tts_engine import synthesize_segments, synthesize, get_wav_duration
 from video_builder import build_video
@@ -139,11 +141,14 @@ def run():
                 intro_audio=intro_audio, title=script["title"])
 
     thumb_path = WORKDIR / "thumbnail.png"
+    accent_word = pick_accent_word(script["title"])
+    print(f"  Thumbnail accent word: {accent_word}")
     build_thumbnail(
         [s["name"] for s in segments],
         representative_images,
         script["title"],
         thumb_path,
+        accent_word=accent_word,
     )
     print(f"  Video: {video_path}")
     print(f"  Thumbnail: {thumb_path}")

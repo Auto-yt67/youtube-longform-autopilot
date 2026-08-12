@@ -101,6 +101,25 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
 }}
 """
 
+ACCENT_PROMPT = """Pick the single most eye-catching word from this YouTube video title:
+
+"{title}"
+
+This word will be printed in RED on the thumbnail while the rest stays black,
+so it needs to be the word that makes someone stop scrolling.
+
+Rules:
+- Pick exactly ONE word that appears in the title, spelled exactly as it appears.
+- Choose the word carrying the hook - the surprising, dramatic, or specific one.
+- Do NOT pick filler words: the, that, a, an, of, and, to, in, with, from, for.
+- Do NOT pick a number.
+
+Respond with ONLY valid JSON, no markdown fences, no preamble:
+{{
+  "accent_word": "the word"
+}}
+"""
+
 
 def _strip_fences(content: str) -> str:
     """Groq sometimes wraps JSON in markdown fences despite instructions."""
@@ -207,6 +226,58 @@ def generate_intro(topic: dict, final_names: list) -> str:
         )
 
 
+_FILLER_WORDS = {
+    "the", "that", "a", "an", "of", "and", "to", "in", "with", "from",
+    "for", "on", "at", "by", "its", "it", "are", "is", "was", "were",
+}
+
+
+def _fallback_accent(title: str) -> str:
+    """Longest non-filler, non-numeric word - used if the API call fails."""
+    words = [w.strip(".,:!?-") for w in title.split()]
+    candidates = [
+        w for w in words
+        if w.lower() not in _FILLER_WORDS and not w.replace(",", "").isdigit()
+    ]
+    return max(candidates, key=len) if candidates else (words[0] if words else "")
+
+
+def pick_accent_word(title: str) -> str:
+    """
+    Choose the word to print in red on the thumbnail.
+
+    Verifies the model's answer actually appears in the title - a hallucinated
+    word would silently fall through to no accent at all, since the thumbnail
+    matches on exact text.
+    """
+    api_key = os.environ["GROQ_API_KEY"]
+    prompt = ACCENT_PROMPT.format(title=title)
+
+    try:
+        resp = groq_post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json_body={
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 100,
+            },
+            timeout=30,
+        )
+        content = _strip_fences(resp.json()["choices"][0]["message"]["content"])
+        word = json.loads(content)["accent_word"].strip()
+
+        title_words = {w.strip(".,:!?-").lower() for w in title.split()}
+        if word.lower() in title_words:
+            return word
+        print(f"  ! Accent word '{word}' not found in title - using fallback")
+    except Exception as e:
+        print(f"  ! Accent word selection failed ({e}) - using fallback")
+
+    return _fallback_accent(title)
+
+
 if __name__ == "__main__":
     from topic_generator import generate_topic
 
@@ -215,3 +286,4 @@ if __name__ == "__main__":
     names = [s["name"] for s in script["segments"]]
     script["intro"] = generate_intro(topic, names)
     print(json.dumps(script, indent=2))
+    print("Accent word:", pick_accent_word(script["title"]))
