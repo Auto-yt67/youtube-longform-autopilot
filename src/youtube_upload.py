@@ -7,13 +7,21 @@ instead of interactively prompting for login every run.
 
 IMPORTANT - one-time manual step required (this cannot be automated,
 since Google's OAuth consent screen needs a human to click "Allow"):
-  1. Run this script locally once: `python youtube_upload.py --auth-only`
+  1. Run this script locally once:
+       export YOUTUBE_CLIENT_SECRETS_PATH=../client_secrets.json
+       python youtube_upload.py --auth-only
   2. It opens a browser, you log in and approve access
   3. It writes token.pickle locally
-  4. base64-encode token.pickle and store it as the GH secret YOUTUBE_TOKEN_B64
-  5. base64-encode your client_secrets.json and store it as YOUTUBE_CLIENT_SECRETS_B64
+  4. base64-encode token.pickle and store it as the GH secret YOUTUBE_TOKEN_PICKLE_B64
+  5. Store your client_secrets.json content (raw JSON or base64, either works)
+     as the GH secret YOUTUBE_CLIENT_SECRETS
 After that, the pipeline refreshes the token automatically forever (Google
 refresh tokens don't expire unless revoked).
+
+Note: YOUTUBE_CLIENT_SECRETS_PATH (local override, points to a file) and
+YOUTUBE_CLIENT_SECRETS (CI secret, holds the file's actual JSON content) are
+intentionally different variable names - they must never collide, or the CI
+secret's JSON content gets misinterpreted as a filesystem path.
 """
 
 import os
@@ -28,7 +36,12 @@ from pathlib import Path
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
           "https://www.googleapis.com/auth/youtube.force-ssl"]
 TOKEN_FILE = Path("token.pickle")
-CLIENT_SECRETS_FILE = Path(os.environ.get("YOUTUBE_CLIENT_SECRETS", "client_secrets.json"))
+# Fixed local path where client secrets always end up on disk, whether they
+# arrived as a CI secret (materialized below) or were placed here manually.
+# YOUTUBE_CLIENT_SECRETS_PATH is a separate, distinctly-named override for
+# local runs only - it must never collide with YOUTUBE_CLIENT_SECRETS, which
+# in CI holds the actual secret *content* (raw JSON), not a path.
+CLIENT_SECRETS_FILE = Path(os.environ.get("YOUTUBE_CLIENT_SECRETS_PATH", "client_secrets.json"))
 
 
 def _maybe_b64_decode(raw: str) -> bytes:
