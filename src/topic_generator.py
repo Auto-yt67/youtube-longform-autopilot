@@ -11,6 +11,8 @@ import json
 import requests
 from pathlib import Path
 
+from groq_client import groq_post
+
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"  # free tier model as of writing
 USED_TOPICS_FILE = Path(__file__).parent.parent / "data" / "used_topics.json"
@@ -57,17 +59,16 @@ def generate_topic() -> dict:
 
     prompt = TOPIC_PROMPT.format(used_topics=json.dumps(used_topics))
 
-    resp = requests.post(
+    resp = groq_post(
         GROQ_URL,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
+        json_body={
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.9,
         },
         timeout=60,
     )
-    resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"].strip()
 
     # Strip accidental markdown fences if the model adds them anyway

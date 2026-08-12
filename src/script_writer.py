@@ -8,7 +8,8 @@ for the image-sourcing stage.
 
 import os
 import json
-import requests
+
+from groq_client import groq_post
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -75,10 +76,10 @@ def generate_script(topic: dict) -> dict:
         title=topic["title"], theme=topic["theme"], item_count=topic["item_count"]
     )
 
-    resp = requests.post(
+    resp = groq_post(
         GROQ_URL,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
+        json_body={
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
@@ -86,7 +87,6 @@ def generate_script(topic: dict) -> dict:
         },
         timeout=120,
     )
-    resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"].strip()
 
     if content.startswith("```"):
@@ -112,10 +112,10 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
         extra_count=extra_count,
     )
 
-    resp = requests.post(
+    resp = groq_post(
         GROQ_URL,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
+        json_body={
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.8,
@@ -123,7 +123,6 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
         },
         timeout=90,
     )
-    resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"].strip()
 
     if content.startswith("```"):
