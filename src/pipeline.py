@@ -14,7 +14,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 
 from topic_generator import generate_topic, save_used_topic
-from script_writer import generate_script
+from script_writer import generate_script, generate_additional_segments
 from image_fetcher import download_images
 from tts_engine import synthesize_segments
 from video_builder import build_video
@@ -22,6 +22,25 @@ from thumbnail_generator import build_thumbnail
 from youtube_upload import upload_to_youtube
 
 WORKDIR = Path("run_output") / datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# Piper's approximate narration speed for this voice. Used only to estimate
+# runtime from word count before TTS runs (TTS is the slow step, so we top
+# up the script BEFORE synthesizing rather than after).
+WORDS_PER_MINUTE = 140
+TARGET_MIN_SECONDS = 8 * 60 + 30  # 8.5 min - small buffer since some segments
+                                   # get dropped later if no clear-license images exist
+MAX_TOPUP_ROUNDS = 4
+SEGMENTS_PER_TOPUP = 3
+
+
+def _estimate_seconds(text: str) -> float:
+    return len(text.split()) / WORDS_PER_MINUTE * 60
+
+
+def _total_estimated_seconds(script: dict) -> float:
+    total = sum(_estimate_seconds(s["script"]) for s in script["segments"])
+    total += _estimate_seconds(script["outro"])
+    return total
 
 
 def run():
@@ -36,9 +55,25 @@ def run():
     # 2. Script
     print("\n[2/6] Writing script...")
     script = generate_script(topic)
-    (WORKDIR / "script.json").write_text(json.dumps(script, indent=2))
     segments = script["segments"]
     print(f"  {len(segments)} segments written")
+
+    # Top up if the script is running short of the 8-minute target -
+    # cheaper to estimate from word count now than to run TTS and redo it
+    estimated = _total_estimated_seconds(script)
+    print(f"  Estimated runtime: {estimated / 60:.1f} min (target: {TARGET_MIN_SECONDS / 60:.1f} min)")
+    rounds = 0
+    while estimated < TARGET_MIN_SECONDS and rounds < MAX_TOPUP_ROUNDS:
+        rounds += 1
+        print(f"  Below target - requesting {SEGMENTS_PER_TOPUP} more segments (round {rounds})...")
+        existing_names = [s["name"] for s in segments]
+        extra = generate_additional_segments(topic, existing_names, SEGMENTS_PER_TOPUP)
+        segments.extend(extra)
+        script["segments"] = segments
+        estimated = _total_estimated_seconds(script)
+        print(f"  New estimated runtime: {estimated / 60:.1f} min ({len(segments)} segments total)")
+
+    (WORKDIR / "script.json").write_text(json.dumps(script, indent=2))
 
     # 3. Images
     print("\n[3/6] Sourcing images from Wikimedia Commons...")

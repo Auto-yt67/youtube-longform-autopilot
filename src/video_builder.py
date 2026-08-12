@@ -1,12 +1,20 @@
 """
 Stage 5: Video assembly.
-Builds the final video matching the observed formula: zoom into the primary
-image while narrating, cut to supporting images partway through, zoom back
-out before the next segment. Audio-driven timing - each segment's visuals
+Builds the final video using static image cuts (no zoom/pan effects):
+each image displays full-frame for its share of the segment's narration,
+then hard-cuts to the next. Audio-driven timing - each segment's visuals
 are stretched/cut to match its voiceover duration exactly.
 """
 
 from pathlib import Path
+from PIL import Image
+
+# moviepy 1.0.3 calls PIL.Image.ANTIALIAS internally, which was removed in
+# Pillow 10+ (renamed to Image.LANCZOS). Patch it back in rather than pinning
+# Pillow down, since other stages rely on the modern Pillow API.
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
+
 from moviepy.editor import (
     ImageClip, AudioFileClip, concatenate_videoclips, CompositeVideoClip
 )
@@ -14,51 +22,36 @@ from moviepy.editor import (
 W, H = 1920, 1080
 
 
-def _ken_burns_clip(image_path: str, duration: float, zoom_in: bool = True) -> ImageClip:
-    """Create a slow zoom (Ken Burns) clip from a still image."""
-    clip = ImageClip(image_path).resize(height=H * 1.15)
-    clip = clip.set_position("center").set_duration(duration)
-
-    start_scale, end_scale = (1.0, 1.12) if zoom_in else (1.12, 1.0)
-
-    def resize_func(t):
-        progress = t / duration if duration > 0 else 0
-        return start_scale + (end_scale - start_scale) * progress
-
-    clip = clip.resize(resize_func)
-    return clip.set_position("center")
+def _cover_fit_clip(image_path: str, duration: float) -> ImageClip:
+    """
+    Static clip: scale the image to fully cover the WxH frame (no letterboxing,
+    no distortion), center-crop any overflow, and hold it still for the full
+    duration. No animation - a plain, fast-to-render still frame.
+    """
+    clip = ImageClip(image_path)
+    img_w, img_h = clip.size
+    scale = max(W / img_w, H / img_h)
+    clip = clip.resize(scale)
+    clip = clip.crop(x_center=clip.w / 2, y_center=clip.h / 2, width=W, height=H)
+    return clip.set_duration(duration)
 
 
 def _build_segment_visual(image_paths: list, duration: float) -> CompositeVideoClip:
     """
-    One segment's visual track: zoom into the first (primary) image,
-    cut to 1-3 supporting images partway through, zoom back out on return
-    to the primary before the segment ends - matching the source formula.
+    One segment's visual track: split the segment's duration evenly across
+    all available images for that segment, each shown as a static still,
+    hard-cut to the next. No zoom, no pan.
     """
     if not image_paths:
         raise ValueError("No images available for this segment")
 
-    primary = image_paths[0]
-    supporting = image_paths[1:4]
+    per_image = duration / len(image_paths)
+    clips = [_cover_fit_clip(p, per_image) for p in image_paths]
 
-    if not supporting or duration < 4:
-        # Short segment or no supporting images - just one zoom-in clip
-        clip = _ken_burns_clip(primary, duration, zoom_in=True)
-        return clip.resize((W, H))
+    if len(clips) == 1:
+        return clips[0]
 
-    # Split time: zoom-in on primary, cut through supporting images, zoom-out on primary
-    intro_dur = duration * 0.3
-    outro_dur = duration * 0.25
-    middle_dur = duration - intro_dur - outro_dur
-    per_support = middle_dur / len(supporting)
-
-    clips = [_ken_burns_clip(primary, intro_dur, zoom_in=True)]
-    for img in supporting:
-        clips.append(_ken_burns_clip(img, per_support, zoom_in=True))
-    clips.append(_ken_burns_clip(primary, outro_dur, zoom_in=False))
-
-    sequence = concatenate_videoclips(clips, method="compose")
-    return sequence.resize((W, H))
+    return concatenate_videoclips(clips, method="compose")
 
 
 def build_video(segments: list, audio_results: list, images_by_segment: dict, out_path: Path):
@@ -80,8 +73,8 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict, ou
     outro_audio = AudioFileClip(audio_results[-1]["wav_path"])
     last_images = images_by_segment.get(len(segments) - 1, [])
     if last_images:
-        outro_visual = _ken_burns_clip(last_images[0], outro_audio.duration, zoom_in=False)
-        outro_visual = outro_visual.resize((W, H)).set_audio(outro_audio)
+        outro_visual = _cover_fit_clip(last_images[0], outro_audio.duration)
+        outro_visual = outro_visual.set_audio(outro_audio)
         clips.append(outro_visual)
 
     final = concatenate_videoclips(clips, method="compose")
