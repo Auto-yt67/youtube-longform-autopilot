@@ -136,7 +136,7 @@ def run():
     print("\n[5/6] Assembling video...")
     video_path = WORKDIR / "final_video.mp4"
     build_video(segments, audio_results, images_by_segment, video_path,
-                intro_audio=intro_audio)
+                intro_audio=intro_audio, title=script["title"])
 
     thumb_path = WORKDIR / "thumbnail.png"
     build_thumbnail(
