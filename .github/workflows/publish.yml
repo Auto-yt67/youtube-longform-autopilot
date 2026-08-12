@@ -34,6 +34,12 @@ jobs:
           python -m piper.download_voices --download-dir "$HOME/.local/share/piper-voices" en_US-norman-medium
           ls -la "$HOME/.local/share/piper-voices"
 
+      - name: Cache rembg model
+        uses: actions/cache@v4
+        with:
+          path: ~/.u2net
+          key: u2net-model-v1
+
       - name: Download display font
         run: |
           mkdir -p src/assets/fonts
