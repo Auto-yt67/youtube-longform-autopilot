@@ -36,10 +36,11 @@ jobs:
       - name: Run pipeline
         working-directory: src
         env:
+          PYTHONUNBUFFERED: "1"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           YOUTUBE_CLIENT_SECRETS: ${{ secrets.YOUTUBE_CLIENT_SECRETS }}
           YOUTUBE_TOKEN_PICKLE_B64: ${{ secrets.YOUTUBE_TOKEN_PICKLE_B64 }}
-        run: python pipeline.py
+        run: python -u pipeline.py
 
       - name: Upload run artifacts (for debugging failed runs)
         if: always()
