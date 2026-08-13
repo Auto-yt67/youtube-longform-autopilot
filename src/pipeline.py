@@ -49,6 +49,36 @@ def _total_estimated_seconds(script: dict) -> float:
     return total
 
 
+def _retitle_count(title: str, n: int) -> str:
+    """
+    Rewrite the leading number in a title to match the real segment count.
+    "12 Forgotten Concept Cars..." shipping only 10 items reads as a mistake
+    to anyone counting, and viewers do count.
+    """
+    words = title.split()
+    if words and words[0].isdigit():
+        words[0] = str(n)
+        return " ".join(words)
+    return title
+
+
+def _source_images_for(segments: list, workdir: Path, start: int = 0):
+    """Fetch images for segments[start:], storing paths on each segment dict."""
+    for i in range(start, len(segments)):
+        seg = segments[i]
+        out_dir = workdir / "images" / f"seg_{i:02d}"
+        try:
+            paths = download_images(seg["image_query"], out_dir, limit=4)
+        except Exception as e:
+            print(f"  ! unexpected failure sourcing images for '{seg['name']}' ({e}) - treating as 0 images")
+            paths = []
+        if not paths:
+            print(f"  ! No clear-license images found for '{seg['name']}' "
+                  f"(query: {seg['image_query']}) - segment will be skipped")
+        seg["_images"] = paths
+        print(f"  {seg['name']}: {len(paths)} images")
+
+
 def run():
     WORKDIR.mkdir(parents=True, exist_ok=True)
     print(f"== Working directory: {WORKDIR} ==")
@@ -79,32 +109,47 @@ def run():
         estimated = _total_estimated_seconds(script)
         print(f"  New estimated runtime: {estimated / 60:.1f} min ({len(segments)} segments total)")
 
-    (WORKDIR / "script.json").write_text(json.dumps(script, indent=2))
-
     # 3. Images
+    #
+    # Segments with no clear-license images get dropped, which used to push
+    # finished videos below target (a 12-item script losing 2 shipped at ~6
+    # min against an 8.5 min goal). So this loops: source, drop, re-estimate,
+    # and request replacements for anything lost.
     print("\n[3/6] Sourcing images from Wikimedia Commons...")
-    images_by_segment = {}
-    representative_images = []
-    for i, seg in enumerate(segments):
-        out_dir = WORKDIR / "images" / f"seg_{i:02d}"
-        try:
-            paths = download_images(seg["image_query"], out_dir, limit=4)
-        except Exception as e:
-            print(f"  ! unexpected failure sourcing images for '{seg['name']}' ({e}) - treating as 0 images")
-            paths = []
-        if not paths:
-            print(f"  ! No clear-license images found for '{seg['name']}' "
-                  f"(query: {seg['image_query']}) - segment will be skipped")
-        images_by_segment[i] = paths
-        representative_images.append(paths[0] if paths else None)
-        print(f"  {seg['name']}: {len(paths)} images")
+    _source_images_for(segments, WORKDIR)
 
-    # Drop segments with zero usable images rather than shipping a blank frame
-    usable = [i for i in range(len(segments)) if images_by_segment[i]]
-    if len(usable) < len(segments):
-        segments = [segments[i] for i in usable]
-        images_by_segment = {new_i: images_by_segment[old_i] for new_i, old_i in enumerate(usable)}
-        representative_images = [representative_images[i] for i in usable]
+    refill_rounds = 0
+    while refill_rounds < MAX_TOPUP_ROUNDS:
+        kept = [s for s in segments if s.get("_images")]
+        dropped = len(segments) - len(kept)
+        segments = kept
+        script["segments"] = segments
+
+        estimated = _total_estimated_seconds(script)
+        if estimated >= TARGET_MIN_SECONDS:
+            if dropped:
+                print(f"  Dropped {dropped} segment(s); still at {estimated / 60:.1f} min - no refill needed")
+            break
+
+        refill_rounds += 1
+        need = max(SEGMENTS_PER_TOPUP, dropped)
+        print(f"  After drops: {len(segments)} segments, {estimated / 60:.1f} min "
+              f"- requesting {need} replacement(s) (round {refill_rounds})...")
+        extra = generate_additional_segments(topic, [s["name"] for s in segments], need)
+        first_new = len(segments)
+        segments.extend(extra)
+        script["segments"] = segments
+        _source_images_for(segments, WORKDIR, start=first_new)
+
+    # Title says "12 Concept Cars" but drops/refills change the count, so
+    # rewrite the leading number to match what actually ships.
+    script["title"] = _retitle_count(script["title"], len(segments))
+    print(f"  Final: {len(segments)} segments - \"{script['title']}\"")
+
+    images_by_segment = {i: s["_images"] for i, s in enumerate(segments)}
+    representative_images = [s["_images"][0] for s in segments]
+
+    (WORKDIR / "script.json").write_text(json.dumps(script, indent=2))
 
     # 3b. Intro - written HERE, not in stage 2, because only now is the final
     # item list known: the top-up loop above may have added segments, and
@@ -141,15 +186,17 @@ def run():
     # thumbnail builders - each cutout costs ~2s and both need the same set.
     print("  Selecting and cutting out subjects...")
     cutouts = prepare_cutouts([s["name"] for s in segments], images_by_segment)
-    print(f"  {sum(c is not None for c in cutouts)}/{len(cutouts)} usable cutouts")
+    print(f"  {sum(c['rgba'] is not None for c in cutouts)}/{len(cutouts)} usable cutouts")
+
+    accent_word = pick_accent_word(script["title"])
+    print(f"  Accent word: {accent_word}")
 
     video_path = WORKDIR / "final_video.mp4"
     build_video(segments, audio_results, images_by_segment, video_path,
-                intro_audio=intro_audio, title=script["title"], cutouts=cutouts)
+                intro_audio=intro_audio, title=script["title"], cutouts=cutouts,
+                accent_word=accent_word)
 
     thumb_path = WORKDIR / "thumbnail.png"
-    accent_word = pick_accent_word(script["title"])
-    print(f"  Thumbnail accent word: {accent_word}")
     build_thumbnail(
         [s["name"] for s in segments],
         representative_images,
@@ -179,7 +226,7 @@ def run():
         publish_settings={"privacyStatus": "public", "publishAt": None},
     )
 
-    save_used_topic(topic["title"])
+    save_used_topic(f"{topic.get('category', 'Unknown')}|{topic['title']}")
     print(f"\n\u2713 Done: {url}")
     return url
 

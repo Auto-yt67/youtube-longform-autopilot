@@ -52,6 +52,16 @@ RING_COLOR = (17, 17, 17)
 # Solid backdrop behind each cut-out car in the grid circles.
 CIRCLE_BG = (238, 234, 226)
 
+# Layout tuning. Cells aim for this width/height ratio - a circle stacked on
+# two lines of label reads best in a slightly wide cell.
+IDEAL_CELL_ASPECT = 1.15
+CIRCLE_W_FRAC = 0.93     # circle diameter vs cell width
+CIRCLE_H_FRAC = 0.96     # circle diameter vs cell height minus label
+LABEL_FRAC = 0.28        # share of cell height reserved for the label
+TITLE_BAND = 0.16        # share of canvas height reserved for the title
+TITLE_FILL = 0.86        # how much of that band the text fills
+ACCENT_COLOR = (214, 26, 26)
+
 # How many of a segment's photos to test for a clean cutout. Each costs
 # ~2s, so testing all 4 across 18 segments adds ~2.5 min to a run.
 CUTOUT_CANDIDATES = 3
@@ -77,10 +87,29 @@ def _font(size: int):
 # ---------------------------------------------------------------- grid build
 
 def _choose_cols(n: int) -> int:
-    """Pick a column count that keeps the grid roughly 16:9."""
+    """
+    Pick a column count that leaves no awkward gaps.
+
+    Empty cells are weighted heavily: 10 items go 5x2 (no gaps) rather than
+    4x3 (two holes in the bottom row). Among layouts that tie on emptiness,
+    prefer cells closest to IDEAL_CELL_ASPECT so circle plus two label lines
+    sits comfortably.
+    """
     if n <= 0:
         return 1
-    return max(1, min(n, round(math.sqrt(n * (W / H)))))
+    if n <= 3:
+        return n
+
+    usable_h = GH * (1 - 0.16 - 0.06)
+    best, best_cost = 1, float("inf")
+    for cols in range(2, min(n, 8) + 1):
+        rows = math.ceil(n / cols)
+        empty = cols * rows - n
+        cell_aspect = (GW / cols) / (usable_h / rows)
+        cost = empty * 2.5 + abs(cell_aspect - IDEAL_CELL_ASPECT)
+        if cost < best_cost:
+            best, best_cost = cols, cost
+    return best
 
 
 def _wrap_to_lines(draw, text, font, max_w):
@@ -140,10 +169,12 @@ def prepare_cutouts(names: list, images_by_segment: dict) -> list:
     """
     Pick the best-framed photo per segment and cut its background out.
 
-    Returns a list aligned to `names`, each entry either an RGBA cutout or
-    None. None means no candidate scored well enough, and the grid falls
-    back to a plain circle crop of the representative photo - a slightly
-    busy circle beats a mangled cutout.
+    Returns a list aligned to `names` of {"rgba", "path"} dicts, with rgba
+    None where no candidate scored well enough (the grid then falls back to
+    a plain circle crop - a slightly busy circle beats a mangled cutout).
+
+    `path` is kept so the full-frame explanation shots can skip the photo
+    already shown in the grid circle, rather than showing it twice.
 
     Called once per run and reused for both the grid and the thumbnail,
     since each cutout costs ~2s.
@@ -152,13 +183,13 @@ def prepare_cutouts(names: list, images_by_segment: dict) -> list:
         from cutout import best_cutout
     except ImportError as e:
         print(f"  ! rembg unavailable ({e}) - using plain photo crops")
-        return [None] * len(names)
+        return [{"rgba": None, "path": None} for _ in names]
 
     results = []
     for i, name in enumerate(names):
         candidates = images_by_segment.get(i, [])[:CUTOUT_CANDIDATES]
         if not candidates:
-            results.append(None)
+            results.append({"rgba": None, "path": None})
             continue
         print(f"    {name}:")
         rgba, path, score = best_cutout(candidates)
@@ -166,11 +197,45 @@ def prepare_cutouts(names: list, images_by_segment: dict) -> list:
             print(f"      -> no usable cutout (best {score:.2f}), using photo crop")
         else:
             print(f"      -> chose {Path(path).name} ({score:.2f})")
-        results.append(rgba)
+        results.append({"rgba": rgba, "path": path})
     return results
 
 
-def _build_grid(names: list, rep_images: list, title: str, cutouts: list = None):
+def _draw_title(draw, title: str, accent_word: str, margin: int, band_h: int):
+    """Draw the title across the top band with one word in ACCENT_COLOR."""
+    words = title.upper().split()
+    if not words:
+        return
+
+    accent_idx = None
+    if accent_word:
+        target = accent_word.strip(".,:!?-").upper()
+        for i, word in enumerate(words):
+            if word.strip(".,:!?-") == target:
+                accent_idx = i
+                break
+
+    size = int(band_h * TITLE_FILL)
+    while size > 30:
+        font = _font(size)
+        if draw.textlength(" ".join(words), font=font) <= GW - 2 * margin:
+            break
+        size -= 6
+    font = _font(size)
+
+    total_w = draw.textlength(" ".join(words), font=font)
+    space_w = draw.textlength(" ", font=font)
+    x = (GW - total_w) / 2
+    y = margin * 0.6
+
+    for i, word in enumerate(words):
+        color = ACCENT_COLOR if i == accent_idx else TEXT_COLOR
+        draw.text((x, y), word, font=font, fill=color)
+        x += draw.textlength(word, font=font) + space_w
+
+
+def _build_grid(names: list, rep_images: list, title: str, cutouts: list = None,
+                accent_word: str = None):
     """
     Render the full grid at GWxGH. Returns (grid_image, cell_boxes) where each
     cell box is the 16:9 region to zoom into for that item.
@@ -186,33 +251,37 @@ def _build_grid(names: list, rep_images: list, title: str, cutouts: list = None)
     cols = _choose_cols(n)
     rows = math.ceil(n / cols)
 
-    margin = int(GW * 0.03)
-    title_h = int(GH * 0.16)
+    margin = int(GW * 0.025)
+    title_h = int(GH * TITLE_BAND)
 
-    # Title across the top, shrunk to fit the canvas width
     if title:
-        size = int(title_h * 0.72)
-        while size > 30:
-            font = _font(size)
-            if draw.textlength(title.upper(), font=font) <= GW - 2 * margin:
-                break
-            size -= 6
-        font = _font(size)
-        tw = draw.textlength(title.upper(), font=font)
-        draw.text(((GW - tw) / 2, margin), title.upper(), font=font, fill=TEXT_COLOR)
+        _draw_title(draw, title, accent_word, margin, title_h)
 
-    grid_top = title_h + margin
+    grid_top = title_h
+    grid_h = GH - grid_top - margin
     cell_w = (GW - 2 * margin) / cols
-    cell_h = (GH - grid_top - margin) / rows
+    cell_h = grid_h / rows
 
-    label_h = cell_h * 0.24
-    diameter = int(min(cell_w * 0.80, (cell_h - label_h) * 0.88))
-    label_start_size = max(30, int(label_h * 0.42))
+    label_h = cell_h * LABEL_FRAC
+    diameter = int(min(cell_w * CIRCLE_W_FRAC, (cell_h - label_h) * CIRCLE_H_FRAC))
+
+    # Two lines at 1.1x leading plus the gap under the circle must stay inside
+    # label_h, or the bottom row's text runs off the canvas.
+    label_start_size = max(28, int(label_h * 0.36))
+
+    # Centre the whole block vertically so short grids don't hug the title
+    block_h = cell_h * rows
+    grid_top += max(0, (grid_h - block_h) / 2)
 
     cell_boxes = []
     for i, name in enumerate(names):
         col, row = i % cols, i // cols
-        cx = margin + cell_w * (col + 0.5)
+
+        # Centre the final row if it's short, so gaps sit at the edges
+        in_row = min(cols, n - row * cols)
+        row_offset = (cols - in_row) * cell_w / 2
+
+        cx = margin + row_offset + cell_w * (col + 0.5)
         cy = grid_top + cell_h * row
 
         # circle image - cut-out car on a solid backdrop where we have one,
@@ -232,12 +301,12 @@ def _build_grid(names: list, rep_images: list, title: str, cutouts: list = None)
         )
 
         # label, capped at two lines
-        font, lines = _fit_label(draw, name, cell_w * 0.92, label_start_size)
-        ly = circle_top + diameter + label_h * 0.12
+        font, lines = _fit_label(draw, name, cell_w * 1.04, label_start_size)
+        ly = circle_top + diameter + label_h * 0.10
         for line in lines:
             lw = draw.textlength(line, font=font)
             draw.text((cx - lw / 2, ly), line, font=font, fill=TEXT_COLOR)
-            ly += font.size * 1.1
+            ly += font.size * 1.08
 
         cell_boxes.append(_aspect_box(cx, cy + cell_h / 2, cell_w, cell_h))
 
@@ -339,7 +408,7 @@ def _build_photo_run(image_paths: list, duration: float):
 
 def build_video(segments: list, audio_results: list, images_by_segment: dict,
                 out_path: Path, intro_audio: dict = None, title: str = None,
-                cutouts: list = None):
+                cutouts: list = None, accent_word: str = None):
     """
     segments: script segments (list of {name, script, image_query})
     audio_results: from tts_engine.synthesize_segments (list of {name, wav_path, duration})
@@ -356,9 +425,11 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict,
         images_by_segment.get(i, [None])[0] if images_by_segment.get(i) else None
         for i in range(len(segments))
     ]
+    cut_rgba = [c["rgba"] for c in cutouts] if cutouts else None
+    cut_paths = [c["path"] for c in cutouts] if cutouts else [None] * len(segments)
 
     print("  Building grid...")
-    grid_img, cell_boxes = _build_grid(names, rep_images, title or "", cutouts)
+    grid_img, cell_boxes = _build_grid(names, rep_images, title or "", cut_rgba, accent_word)
     full_box = (0, 0, GW, GH)
 
     grid_still_path = out_path.parent / "grid.jpg"
@@ -378,6 +449,12 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict,
         images = images_by_segment.get(i, [])
         duration = audio.duration
 
+        # The photo already shown in this item's grid circle shouldn't come
+        # back full-frame - the viewer just watched it zoom past. Only skip
+        # it if there's something else left to show.
+        remaining = [p for p in images if p != cut_paths[i]]
+        photo_pool = remaining if remaining else images
+
         parts = []
         photo_time = duration
         # Only bookend with zooms if there's room for real content between them
@@ -386,7 +463,7 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict,
                                       frames_dir, f"in_{i:02d}"))
             photo_time -= 2 * ZOOM_SECONDS
 
-        parts.append(_build_photo_run(images, photo_time))
+        parts.append(_build_photo_run(photo_pool, photo_time))
 
         if duration > 2 * ZOOM_SECONDS + 4:
             parts.append(_render_zoom(grid_img, cell_boxes[i], full_box,
