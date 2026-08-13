@@ -54,12 +54,16 @@ CIRCLE_BG = (238, 234, 226)
 
 # Layout tuning. Cells aim for this width/height ratio - a circle stacked on
 # two lines of label reads best in a slightly wide cell.
+#
+# With 3+ rows the circle is height-constrained, not width-constrained, so
+# growing it means taking space back from the label band and title, not
+# raising CIRCLE_W_FRAC.
 IDEAL_CELL_ASPECT = 1.15
-CIRCLE_W_FRAC = 0.93     # circle diameter vs cell width
-CIRCLE_H_FRAC = 0.96     # circle diameter vs cell height minus label
-LABEL_FRAC = 0.28        # share of cell height reserved for the label
-TITLE_BAND = 0.16        # share of canvas height reserved for the title
-TITLE_FILL = 0.86        # how much of that band the text fills
+CIRCLE_W_FRAC = 0.97     # circle diameter vs cell width
+CIRCLE_H_FRAC = 1.00     # circle diameter vs cell height minus label
+LABEL_FRAC = 0.22        # share of cell height reserved for the label
+TITLE_BAND = 0.13        # share of canvas height reserved for the title
+TITLE_FILL = 0.92        # how much of that band the text fills
 ACCENT_COLOR = (214, 26, 26)
 
 # How many of a segment's photos to test for a clean cutout. Each costs
@@ -88,28 +92,36 @@ def _font(size: int):
 
 def _choose_cols(n: int) -> int:
     """
-    Pick a column count that leaves no awkward gaps.
+    Pick a column count that fills every row completely.
 
-    Empty cells are weighted heavily: 10 items go 5x2 (no gaps) rather than
-    4x3 (two holes in the bottom row). Among layouts that tie on emptiness,
-    prefer cells closest to IDEAL_CELL_ASPECT so circle plus two label lines
-    sits comfortably.
+    Exact divisors only, where one exists in a sensible range - a short
+    bottom row reads as a layout bug even when it's centred. The pipeline
+    trims item counts to griddable numbers, so this almost always finds one;
+    the fallback handles odd counts (primes like 19) if it doesn't.
     """
     if n <= 0:
         return 1
     if n <= 3:
         return n
 
-    usable_h = GH * (1 - 0.16 - 0.06)
-    best, best_cost = 1, float("inf")
-    for cols in range(2, min(n, 8) + 1):
+    usable_h = GH * (1 - TITLE_BAND - 0.06)
+
+    # Cap at 6 columns. Beyond that, circles shrink and long names like
+    # "Chevrolet Corvette Mako Shark" wrap into unreadable slivers - 16 items
+    # want 4x4, not 8x2.
+    max_cols = min(n, 6)
+
+    def cell_cost(cols):
         rows = math.ceil(n / cols)
-        empty = cols * rows - n
-        cell_aspect = (GW / cols) / (usable_h / rows)
-        cost = empty * 2.5 + abs(cell_aspect - IDEAL_CELL_ASPECT)
-        if cost < best_cost:
-            best, best_cost = cols, cost
-    return best
+        return abs((GW / cols) / (usable_h / rows) - IDEAL_CELL_ASPECT)
+
+    divisors = [c for c in range(2, max_cols + 1) if n % c == 0]
+    if divisors:
+        return min(divisors, key=cell_cost)
+
+    # No clean divisor - minimise empty cells, then aspect
+    return min(range(2, max_cols + 1),
+               key=lambda c: (math.ceil(n / c) * c - n) * 2.5 + cell_cost(c))
 
 
 def _wrap_to_lines(draw, text, font, max_w):
@@ -265,9 +277,10 @@ def _build_grid(names: list, rep_images: list, title: str, cutouts: list = None,
     label_h = cell_h * LABEL_FRAC
     diameter = int(min(cell_w * CIRCLE_W_FRAC, (cell_h - label_h) * CIRCLE_H_FRAC))
 
-    # Two lines at 1.1x leading plus the gap under the circle must stay inside
-    # label_h, or the bottom row's text runs off the canvas.
-    label_start_size = max(28, int(label_h * 0.36))
+    # Two lines at 1.08x leading plus the gap under the circle must stay
+    # inside label_h, or the bottom row's text runs off the canvas. With
+    # LABEL_FRAC at 0.22 that caps the font at ~0.40 of the band.
+    label_start_size = max(26, int(label_h * 0.40))
 
     # Centre the whole block vertically so short grids don't hug the title
     block_h = cell_h * rows

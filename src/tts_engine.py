@@ -18,10 +18,11 @@ from pathlib import Path
 VOICE = "en_US-bryce-medium"  # male narration voice
 
 # Playback speed. Piper's length_scale is INVERSE to speed:
-#   1.0  = normal
-#   0.80 = 1.25x faster  <-- current setting
-#   0.67 = 1.5x faster
-LENGTH_SCALE = 0.80
+#   1.0  = the voice's own baseline pace
+#   0.80 = 1.25x
+#   0.64 = 1.56x  <-- current setting (another 1.25x on top of 0.80)
+#   0.50 = 2.0x
+LENGTH_SCALE = 0.64
 
 # Must match the --download-dir used in the GitHub Actions workflow's
 # "Download Piper voice model" step. Using a fixed absolute path (rather than

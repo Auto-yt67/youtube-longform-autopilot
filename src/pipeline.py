@@ -1,6 +1,6 @@
 """
 Full pipeline orchestrator. Runs every stage end to end:
-  topic -> script -> images -> intro -> voiceover -> video -> thumbnail -> upload
+  topic -> script -> images -> voiceover -> intro -> video -> thumbnail -> upload
 
 Run this from GitHub Actions on a schedule, or locally with:
     python src/pipeline.py
@@ -18,25 +18,33 @@ from script_writer import (
     generate_script, generate_additional_segments, generate_intro, pick_accent_word
 )
 from image_fetcher import download_images
-from tts_engine import synthesize_segments, synthesize, get_wav_duration
+from tts_engine import synthesize, get_wav_duration
 from video_builder import build_video, prepare_cutouts
 from thumbnail_generator import build_thumbnail
 from youtube_upload import upload_to_youtube
 
 WORKDIR = Path("run_output") / datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# Piper's approximate narration speed for this voice. Used only to estimate
-# runtime from word count before TTS runs (TTS is the slow step, so we top
-# up the script BEFORE synthesizing rather than after).
-#
-# NOTE: this must track tts_engine.LENGTH_SCALE. At length_scale 0.80 (1.25x)
-# the effective rate is ~175 wpm, not the ~140 wpm of the old 1.0x voice.
-# Leaving this at 140 would make every video overshoot the target by ~25%.
-WORDS_PER_MINUTE = 175
-TARGET_MIN_SECONDS = 8 * 60 + 30  # 8.5 min - small buffer since some segments
-                                   # get dropped later if no clear-license images exist
+# Word-count estimate, used only to decide how much script to write BEFORE
+# running TTS. It tracks tts_engine.LENGTH_SCALE (~220 wpm at 0.64) but it is
+# only ever a guess - the real floor is enforced against measured audio below.
+WORDS_PER_MINUTE = 220
+TARGET_MIN_SECONDS = 8 * 60 + 30
+
+# HARD FLOOR on the finished video, checked against actual synthesized audio
+# rather than estimated word counts. If the voice turns out faster than
+# WORDS_PER_MINUTE assumes, this catches it and writes more script; the
+# estimate alone would happily ship a 6-minute video.
+MIN_VIDEO_SECONDS = 8 * 60
+
 MAX_TOPUP_ROUNDS = 4
+MAX_LENGTH_ROUNDS = 4
 SEGMENTS_PER_TOPUP = 3
+
+# Counts that tile into a full rectangle with no ragged last row. 19 items
+# can only be 19x1 or 1x19, so a 19-item script ships 18 and the odd one out
+# gets cut - a clean grid is worth ~45 seconds of runtime.
+GRIDDABLE_COUNTS = [8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 24]
 
 
 def _estimate_seconds(text: str) -> float:
@@ -62,6 +70,26 @@ def _retitle_count(title: str, n: int) -> str:
     return title
 
 
+def _trim_to_griddable(segments: list) -> list:
+    """Drop trailing segments until the count tiles evenly."""
+    n = len(segments)
+    if n in GRIDDABLE_COUNTS:
+        return segments
+    smaller = [c for c in GRIDDABLE_COUNTS if c < n]
+    if not smaller:
+        return segments
+    target = max(smaller)
+    dropped = [s["name"] for s in segments[target:]]
+    print(f"  Trimming {n} -> {target} for an even grid (cut: {', '.join(dropped)})")
+    return segments[:target]
+
+
+def _next_griddable(n: int) -> int:
+    """Smallest griddable count above n - the target when a video runs short."""
+    larger = [c for c in GRIDDABLE_COUNTS if c > n]
+    return larger[0] if larger else n + 2
+
+
 def _source_images_for(segments: list, workdir: Path, start: int = 0):
     """Fetch images for segments[start:], storing paths on each segment dict."""
     for i in range(start, len(segments)):
@@ -79,6 +107,23 @@ def _source_images_for(segments: list, workdir: Path, start: int = 0):
         print(f"  {seg['name']}: {len(paths)} images")
 
 
+def _synthesize_missing(segments: list, audio_dir: Path):
+    """
+    Synthesize any segment that doesn't have audio yet, caching the result on
+    the segment dict. Re-running this after adding segments only pays for the
+    new ones - TTS is the slowest stage, so re-synthesizing everything on each
+    length-check round would multiply run time.
+    """
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    for i, seg in enumerate(segments):
+        if seg.get("_wav"):
+            continue
+        wav_path = audio_dir / f"segment_{i:02d}.wav"
+        synthesize(seg["script"], wav_path)
+        seg["_wav"] = str(wav_path)
+        seg["_duration"] = get_wav_duration(wav_path)
+
+
 def run():
     WORKDIR.mkdir(parents=True, exist_ok=True)
     print(f"== Working directory: {WORKDIR} ==")
@@ -94,16 +139,16 @@ def run():
     segments = script["segments"]
     print(f"  {len(segments)} segments written")
 
-    # Top up if the script is running short of the 8-minute target -
-    # cheaper to estimate from word count now than to run TTS and redo it
+    # Top up if the script looks short. This is the cheap estimate pass -
+    # writing script is fast, TTS is slow, so overshoot here rather than
+    # discovering the shortfall after synthesis.
     estimated = _total_estimated_seconds(script)
     print(f"  Estimated runtime: {estimated / 60:.1f} min (target: {TARGET_MIN_SECONDS / 60:.1f} min)")
     rounds = 0
     while estimated < TARGET_MIN_SECONDS and rounds < MAX_TOPUP_ROUNDS:
         rounds += 1
         print(f"  Below target - requesting {SEGMENTS_PER_TOPUP} more segments (round {rounds})...")
-        existing_names = [s["name"] for s in segments]
-        extra = generate_additional_segments(topic, existing_names, SEGMENTS_PER_TOPUP)
+        extra = generate_additional_segments(topic, [s["name"] for s in segments], SEGMENTS_PER_TOPUP)
         segments.extend(extra)
         script["segments"] = segments
         estimated = _total_estimated_seconds(script)
@@ -112,8 +157,7 @@ def run():
     # 3. Images
     #
     # Segments with no clear-license images get dropped, which used to push
-    # finished videos below target (a 12-item script losing 2 shipped at ~6
-    # min against an 8.5 min goal). So this loops: source, drop, re-estimate,
+    # finished videos below target. So this loops: source, drop, re-estimate,
     # and request replacements for anything lost.
     print("\n[3/6] Sourcing images from Wikimedia Commons...")
     _source_images_for(segments, WORKDIR)
@@ -141,6 +185,52 @@ def run():
         script["segments"] = segments
         _source_images_for(segments, WORKDIR, start=first_new)
 
+    segments = _trim_to_griddable(segments)
+    script["segments"] = segments
+
+    # 4. Voiceover, with a hard length floor checked against real audio.
+    #
+    # The word-count estimate above is a guess that depends on LENGTH_SCALE and
+    # the voice's own pace; when it's optimistic, videos ship short. This loop
+    # measures the synthesized wavs and writes more segments until the real
+    # runtime clears MIN_VIDEO_SECONDS, always landing on a griddable count so
+    # the grid stays a full rectangle.
+    print("\n[4/6] Generating voiceover (Piper TTS)...")
+    audio_dir = WORKDIR / "audio"
+    _synthesize_missing(segments, audio_dir)
+
+    outro_wav = audio_dir / "outro.wav"
+    synthesize(script["outro"], outro_wav)
+    outro_duration = get_wav_duration(outro_wav)
+
+    length_rounds = 0
+    while length_rounds < MAX_LENGTH_ROUNDS:
+        spoken = sum(s["_duration"] for s in segments) + outro_duration
+        print(f"  Measured runtime: {spoken / 60:.1f} min "
+              f"({len(segments)} segments, floor {MIN_VIDEO_SECONDS / 60:.0f} min)")
+        if spoken >= MIN_VIDEO_SECONDS:
+            break
+
+        length_rounds += 1
+        target = _next_griddable(len(segments))
+        need = target - len(segments)
+        print(f"  Short by {(MIN_VIDEO_SECONDS - spoken) / 60:.1f} min - "
+              f"adding {need} segment(s) to reach {target} (round {length_rounds})...")
+
+        extra = generate_additional_segments(topic, [s["name"] for s in segments], need)
+        first_new = len(segments)
+        segments.extend(extra)
+        _source_images_for(segments, WORKDIR, start=first_new)
+
+        segments = [s for s in segments if s.get("_images")]
+        segments = _trim_to_griddable(segments)
+        script["segments"] = segments
+        _synthesize_missing(segments, audio_dir)
+    else:
+        spoken = sum(s["_duration"] for s in segments) + outro_duration
+        if spoken < MIN_VIDEO_SECONDS:
+            print(f"  ! Still {spoken / 60:.1f} min after {MAX_LENGTH_ROUNDS} rounds - shipping anyway")
+
     # Title says "12 Concept Cars" but drops/refills change the count, so
     # rewrite the leading number to match what actually ships.
     script["title"] = _retitle_count(script["title"], len(segments))
@@ -148,23 +238,22 @@ def run():
 
     images_by_segment = {i: s["_images"] for i, s in enumerate(segments)}
     representative_images = [s["_images"][0] for s in segments]
+    audio_results = [
+        {"name": s["name"], "wav_path": s["_wav"], "duration": s["_duration"]}
+        for s in segments
+    ]
+    audio_results.append({
+        "name": "outro", "wav_path": str(outro_wav), "duration": outro_duration,
+    })
 
-    (WORKDIR / "script.json").write_text(json.dumps(script, indent=2))
-
-    # 3b. Intro - written HERE, not in stage 2, because only now is the final
-    # item list known: the top-up loop above may have added segments, and
-    # image sourcing may have dropped others. An intro written any earlier
-    # would promise cars that never appear on screen.
-    print("\n[3b/6] Writing intro narration...")
+    # 4b. Intro - written HERE, after the segment list is finally settled.
+    # Top-ups, image drops, trimming, and the length loop above can all change
+    # which items ship; an intro written any earlier would promise cars that
+    # never appear on screen.
+    print("\n[4b/6] Writing intro narration...")
     intro_text = generate_intro(topic, [s["name"] for s in segments])
     script["intro"] = intro_text
-    (WORKDIR / "script.json").write_text(json.dumps(script, indent=2))
     print(f"  Intro: {len(intro_text.split())} words")
-
-    # 4. Voiceover
-    print("\n[4/6] Generating voiceover (Piper TTS)...")
-    audio_dir = WORKDIR / "audio"
-    audio_dir.mkdir(parents=True, exist_ok=True)
 
     intro_wav = audio_dir / "intro.wav"
     synthesize(intro_text, intro_wav)
@@ -173,11 +262,12 @@ def run():
         "wav_path": str(intro_wav),
         "duration": get_wav_duration(intro_wav),
     }
-    print(f"  Intro voiceover: {intro_audio['duration']:.1f}s")
-
-    audio_results = synthesize_segments(segments, script["outro"], audio_dir)
     total_duration = intro_audio["duration"] + sum(a["duration"] for a in audio_results)
     print(f"  Total runtime: {total_duration / 60:.1f} min")
+
+    (WORKDIR / "script.json").write_text(json.dumps(
+        {k: v for k, v in script.items()}, indent=2, default=str
+    ))
 
     # 5. Video + thumbnail
     print("\n[5/6] Assembling video...")
