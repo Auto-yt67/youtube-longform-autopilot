@@ -193,8 +193,7 @@ def run():
 
     video_path = WORKDIR / "final_video.mp4"
     build_video(segments, audio_results, images_by_segment, video_path,
-                intro_audio=intro_audio, title=script["title"], cutouts=cutouts,
-                accent_word=accent_word)
+                intro_audio=intro_audio, title=script["title"], cutouts=cutouts)
 
     thumb_path = WORKDIR / "thumbnail.png"
     build_thumbnail(

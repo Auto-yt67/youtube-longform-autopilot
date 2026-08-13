@@ -415,7 +415,10 @@ def build_video(segments: list, audio_results: list, images_by_segment: dict,
     images_by_segment: {segment_index: [local image paths]}
     intro_audio: {name, wav_path, duration} for the grid intro, or None
     title: video title, drawn across the top of the grid
-    cutouts: background-removed subjects from prepare_cutouts(), or None
+    cutouts: {"rgba", "path"} entries from prepare_cutouts(), or None
+    accent_word: word to print in red. Left None by the pipeline - the red
+        word is a thumbnail-only device, since in-video it competes with the
+        cars for attention rather than earning a click.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frames_dir = out_path.parent / "zoom_frames"
