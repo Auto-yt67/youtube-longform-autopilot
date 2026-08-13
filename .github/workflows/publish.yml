@@ -2,8 +2,12 @@ name: Publish Car Professor Video
 
 on:
   schedule:
-    # Runs Mon/Wed/Fri at 3pm UTC. Adjust to taste - cron is UTC always.
-    - cron: "0 15 * * 1,3,5"
+    # Cron is always UTC and ignores daylight saving, so 3pm Eastern needs two
+    # entries: 19:00 UTC during EDT (summer) and 20:00 UTC during EST (winter).
+    # Both fire year-round; the guard step below exits the run unless it's
+    # actually 15:00 in New York, so exactly one publishes per day.
+    - cron: "0 19 * * *"
+    - cron: "0 20 * * *"
   workflow_dispatch: {}   # lets you also trigger it manually from the Actions tab
 
 jobs:
@@ -12,6 +16,16 @@ jobs:
     timeout-minutes: 90
 
     steps:
+      - name: Skip unless 3pm Eastern
+        if: github.event_name == 'schedule'
+        run: |
+          HOUR=$(TZ=America/New_York date +%H)
+          if [ "$HOUR" != "15" ]; then
+            echo "It is ${HOUR}:00 in New York, not 15:00 - skipping this trigger."
+            exit 1
+          fi
+          echo "3pm Eastern confirmed - continuing."
+
       - name: Check out repo
         uses: actions/checkout@v4
 
