@@ -31,7 +31,7 @@ jobs:
       - name: Download Piper voice model
         run: |
           mkdir -p "$HOME/.local/share/piper-voices"
-          python -m piper.download_voices --download-dir "$HOME/.local/share/piper-voices" en_US-norman-medium
+          python -m piper.download_voices --download-dir "$HOME/.local/share/piper-voices" en_US-bryce-medium
           ls -la "$HOME/.local/share/piper-voices"
 
       - name: Cache rembg model
