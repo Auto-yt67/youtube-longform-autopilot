@@ -8,14 +8,14 @@ fast enough for CI runners.
 Setup (handled in the GitHub Actions workflow, or run manually):
     pip install piper-tts
     # downloads a voice model on first use, or pre-fetch with:
-    python -m piper.download_voices en_US-norman-medium
+    python -m piper.download_voices en_US-bryce-medium
 """
 
 import subprocess
 import wave
 from pathlib import Path
 
-VOICE = "en_US-norman-medium"  # male narration voice
+VOICE = "en_US-bryce-medium"  # male narration voice
 
 # Playback speed. Piper's length_scale is INVERSE to speed:
 #   1.0  = normal
