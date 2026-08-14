@@ -4,7 +4,7 @@ on:
   schedule:
     # Cron is always UTC and ignores daylight saving, so 3pm Eastern needs two
     # entries: 19:00 UTC during EDT (summer) and 20:00 UTC during EST (winter).
-    # Both fire year-round; the guard step below exits the run unless it's
+    # Both fire year-round; the guard step below skips the run unless it's
     # actually 15:00 in New York, so exactly one publishes per day.
     - cron: "0 19 * * *"
     - cron: "0 20 * * *"
@@ -16,45 +16,55 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Skip unless 3pm Eastern
+      - name: Check if it's 3pm Eastern
+        id: time_check
         if: github.event_name == 'schedule'
         run: |
           HOUR=$(TZ=America/New_York date +%H)
-          if [ "$HOUR" != "15" ]; then
-            echo "It is ${HOUR}:00 in New York, not 15:00 - skipping this trigger."
-            exit 1
+          if [ "$HOUR" = "15" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "3pm Eastern confirmed - continuing."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "It is ${HOUR}:00 in New York, not 15:00 - skipping this trigger (not a failure, just not the right hour)."
           fi
-          echo "3pm Eastern confirmed - continuing."
 
       - name: Check out repo
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install ffmpeg and fonts
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
 
       - name: Install Python dependencies
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         run: pip install -r requirements.txt
 
       - name: Download Piper voice model
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         run: |
           mkdir -p "$HOME/.local/share/piper-voices"
           python -m piper.download_voices --download-dir "$HOME/.local/share/piper-voices" en_US-bryce-medium
           ls -la "$HOME/.local/share/piper-voices"
 
       - name: Cache rembg model
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.u2net
           key: u2net-model-v1
 
       - name: Download display font
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         run: |
           mkdir -p src/assets/fonts
           curl -sL -o src/assets/fonts/LuckiestGuy-Regular.ttf \
@@ -62,6 +72,7 @@ jobs:
           ls -la src/assets/fonts
 
       - name: Run pipeline
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
         working-directory: src
         env:
           PYTHONUNBUFFERED: "1"
@@ -71,7 +82,7 @@ jobs:
         run: python -u pipeline.py
 
       - name: Upload run artifacts (for debugging failed runs)
-        if: always()
+        if: always() && (github.event_name != 'schedule' || steps.time_check.outputs.run == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: run-output
