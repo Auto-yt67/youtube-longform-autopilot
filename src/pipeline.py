@@ -41,7 +41,8 @@ def _estimate_seconds(text: str) -> float:
 
 
 def _total_estimated_seconds(script: dict) -> float:
-    total = sum(_estimate_seconds(s["script"]) for s in script["segments"])
+    total = _estimate_seconds(script["intro"])
+    total += sum(_estimate_seconds(s["script"]) for s in script["segments"])
     total += _estimate_seconds(script["outro"])
     return total
 
@@ -85,6 +86,19 @@ def run():
 
     # 3. Images
     print("\n[3/6] Sourcing images from Wikimedia Commons...")
+
+    intro_dir = WORKDIR / "images" / "intro"
+    try:
+        intro_images = download_images(script["intro_image_query"], intro_dir, limit=4)
+    except Exception as e:
+        print(f"  ! unexpected failure sourcing intro images ({e}) - treating as 0 images")
+        intro_images = []
+    if not intro_images:
+        print(f"  ! No clear-license images found for the intro "
+              f"(query: {script['intro_image_query']}) - will fall back to the first segment's image")
+    else:
+        print(f"  Intro: {len(intro_images)} images")
+
     images_by_segment = {}
     representative_images = []
     for i, seg in enumerate(segments):
@@ -108,17 +122,21 @@ def run():
         images_by_segment = {new_i: images_by_segment[old_i] for new_i, old_i in enumerate(usable)}
         representative_images = [representative_images[i] for i in usable]
 
+    # Fall back to the first segment's images if the intro itself came up empty
+    if not intro_images and images_by_segment.get(0):
+        intro_images = images_by_segment[0]
+
     # 4. Voiceover
     print("\n[4/6] Generating voiceover (Piper TTS)...")
     audio_dir = WORKDIR / "audio"
-    audio_results = synthesize_segments(segments, script["outro"], audio_dir)
+    audio_results = synthesize_segments(segments, script["intro"], script["outro"], audio_dir)
     total_duration = sum(a["duration"] for a in audio_results)
     print(f"  Total runtime: {total_duration / 60:.1f} min")
 
     # 5. Video + thumbnail
     print("\n[5/6] Assembling video...")
     video_path = WORKDIR / "final_video.mp4"
-    build_video(segments, audio_results, images_by_segment, video_path)
+    build_video(segments, audio_results, images_by_segment, intro_images, video_path)
 
     thumb_path = WORKDIR / "thumbnail.png"
     build_thumbnail(
