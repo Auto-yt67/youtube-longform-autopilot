@@ -12,7 +12,7 @@ import json
 from groq_client import groq_post
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"  # Groq deprecated the llama-3.3 chat models in 2026; this is their current recommended general-purpose model
 
 SCRIPT_PROMPT = """Write the full narration script for a YouTube video titled:
 "{title}"
