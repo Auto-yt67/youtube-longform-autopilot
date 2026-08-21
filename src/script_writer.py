@@ -83,7 +83,9 @@ def generate_script(topic: dict) -> dict:
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 8000,
+            "max_tokens": 6000,  # Groq's free tier caps gpt-oss-120b at 8,000 TPM total
+                                  # (input+output combined) - 6000 leaves headroom for the
+                                  # prompt itself and stays safely under that ceiling
         },
         timeout=120,
     )
