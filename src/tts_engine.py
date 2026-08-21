@@ -8,14 +8,14 @@ fast enough for CI runners.
 Setup (handled in the GitHub Actions workflow, or run manually):
     pip install piper-tts
     # downloads a voice model on first use, or pre-fetch with:
-    python -m piper.download_voices en_US-lessac-medium
+    python -m piper.download_voices en_US-bryce-medium
 """
 
 import subprocess
 import wave
 from pathlib import Path
 
-VOICE = "en_US-lessac-medium"  # natural-sounding free voice; swap for others as desired
+VOICE = "en_US-bryce-medium"  # matches the voice downloaded in the GitHub Actions workflow
 
 # Must match the --download-dir used in the GitHub Actions workflow's
 # "Download Piper voice model" step. Using a fixed absolute path (rather than
