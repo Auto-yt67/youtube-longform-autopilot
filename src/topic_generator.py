@@ -8,7 +8,6 @@ just a free API key stored as a GitHub secret (GROQ_API_KEY).
 
 import os
 import json
-import requests
 from pathlib import Path
 
 from groq_client import groq_post
@@ -71,7 +70,6 @@ def generate_topic() -> dict:
     )
     content = resp.json()["choices"][0]["message"]["content"].strip()
 
-    # Strip accidental markdown fences if the model adds them anyway
     if content.startswith("```"):
         content = content.strip("`")
         content = content.split("\n", 1)[1] if "\n" in content else content

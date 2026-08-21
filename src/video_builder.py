@@ -67,29 +67,16 @@ def _build_segment_visual(image_paths: list, duration: float) -> CompositeVideoC
     return concatenate_videoclips(clips, method="compose")
 
 
-def build_video(segments: list, audio_results: list, images_by_segment: dict,
-                 intro_images: list, out_path: Path):
+def build_video(segments: list, audio_results: list, images_by_segment: dict, out_path: Path):
     """
     segments: script segments (list of {name, script, image_query})
-    audio_results: from tts_engine.synthesize_segments - intro first, then one
-        entry per segment, then outro last (list of {name, wav_path, duration})
+    audio_results: from tts_engine.synthesize_segments (list of {name, wav_path, duration})
     images_by_segment: {segment_index: [local image paths]}
-    intro_images: local image paths for the intro clip
     """
     clips = []
 
-    # Intro is always audio_results[0]
-    intro_audio = AudioFileClip(audio_results[0]["wav_path"])
-    if intro_images:
-        intro_visual = _build_segment_visual(intro_images, intro_audio.duration)
-        intro_visual = intro_visual.set_audio(intro_audio)
-        clips.append(intro_visual)
-    else:
-        print("  ! No intro images available - intro will be silent/skipped visually")
-
-    # Segment audio is offset by 1 in audio_results because of the intro entry
     for i, seg in enumerate(segments):
-        audio = AudioFileClip(audio_results[i + 1]["wav_path"])
+        audio = AudioFileClip(audio_results[i]["wav_path"])
         images = images_by_segment.get(i, [])
         visual = _build_segment_visual(images, audio.duration)
         visual = visual.set_audio(audio)

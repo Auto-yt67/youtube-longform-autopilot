@@ -8,14 +8,14 @@ fast enough for CI runners.
 Setup (handled in the GitHub Actions workflow, or run manually):
     pip install piper-tts
     # downloads a voice model on first use, or pre-fetch with:
-    python -m piper.download_voices en_US-bryce-medium
+    python -m piper.download_voices en_US-lessac-medium
 """
 
 import subprocess
 import wave
 from pathlib import Path
 
-VOICE = "en_US-bryce-medium"  # matches the voice downloaded in the GitHub Actions workflow
+VOICE = "en_US-lessac-medium"  # natural-sounding free voice; swap for others as desired
 
 # Must match the --download-dir used in the GitHub Actions workflow's
 # "Download Piper voice model" step. Using a fixed absolute path (rather than
@@ -43,22 +43,13 @@ def get_wav_duration(wav_path: Path) -> float:
         return frames / float(rate)
 
 
-def synthesize_segments(segments: list, intro: str, outro: str, out_dir: Path) -> list:
+def synthesize_segments(segments: list, outro: str, out_dir: Path) -> list:
     """
-    Synthesize the intro, each segment's script, and the outro to individual
-    wav files. Returns list of dicts: {name, wav_path, duration}, with the
-    intro first and outro last.
+    Synthesize each segment's script (plus the outro) to individual wav files.
+    Returns list of dicts: {name, wav_path, duration}
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
-
-    intro_path = out_dir / "intro.wav"
-    synthesize(intro, intro_path)
-    results.append({
-        "name": "intro",
-        "wav_path": str(intro_path),
-        "duration": get_wav_duration(intro_path),
-    })
 
     for i, seg in enumerate(segments):
         wav_path = out_dir / f"segment_{i:02d}.wav"

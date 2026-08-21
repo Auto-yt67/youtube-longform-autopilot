@@ -2,7 +2,7 @@
 Stage 2: Script generation.
 Writes the full narration script for a topic, matching the "catalog" formula:
 cold open per item (no transition fluff), tight self-contained story arc,
-~120-220 words per segment. Also produces an image search query per segment
+~150-260 words per segment. Also produces an image search query per segment
 for the image-sourcing stage.
 """
 
@@ -21,12 +21,8 @@ Theme: {theme}
 Number of items: {item_count}
 
 Format rules (match this exactly - it's a proven formula):
-- Open with a short INTRO (2-4 sentences): hook the viewer on the theme and
-  briefly preview what the video covers, in plain factual language - no
-  "welcome back to the channel," no host chatter, no rhetorical questions.
-  Think of it as the setup a documentary narrator would give before diving in.
-- After the intro, each item gets its own segment. Start COLD with the item's
-  name/title - no "next up" or "let's talk about" transitions.
+- Each item gets its own segment. Start COLD with the item's name/title - no
+  "next up" or "let's talk about" transitions.
 - Each segment: 150-260 words. Tell a tight story - what it was, the key
   twist/event/fact that makes it notable, and what happened to it (the "fate").
 - Plain, punchy, factual narration. No fluff, no rhetorical questions, no host
@@ -35,16 +31,13 @@ Format rules (match this exactly - it's a proven formula):
 - End with a short outro (2-3 sentences: ask viewers what they want to see
   next, like/subscribe).
 
-Also provide an "intro_image_query" (3-6 words) for a general establishing
-visual that fits the intro - and, for EACH segment, a short "image_query"
-(3-6 words) that would find real photos of that exact car/subject on
+Also provide, for EACH segment, a short "image_query" - a specific search
+term (3-6 words) that would find real photos of that exact car/subject on
 Wikimedia Commons.
 
 Respond with ONLY valid JSON, no markdown fences, no preamble:
 {{
   "title": "{title}",
-  "intro": "the intro narration text",
-  "intro_image_query": "search terms",
   "segments": [
     {{"name": "item name", "script": "the narration text", "image_query": "search terms"}}
   ],
