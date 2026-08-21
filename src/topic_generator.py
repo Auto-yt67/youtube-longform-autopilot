@@ -65,6 +65,8 @@ def generate_topic() -> dict:
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.9,
+            "reasoning_effort": "low",  # gpt-oss-120b is a reasoning model - keep effort low so
+                                          # token budget goes toward the actual JSON answer
         },
         timeout=60,
     )
@@ -75,6 +77,12 @@ def generate_topic() -> dict:
         content = content.split("\n", 1)[1] if "\n" in content else content
         content = content.rsplit("```", 1)[0]
 
+    if not content:
+        raise ValueError(
+            "Groq returned an empty response for the topic generation call. This usually "
+            "means the model spent its entire token budget on internal reasoning and never "
+            "wrote the actual answer - try raising max_tokens or lowering reasoning_effort further."
+        )
     topic = json.loads(content)
     return topic
 

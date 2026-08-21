@@ -83,9 +83,13 @@ def generate_script(topic: dict) -> dict:
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 6000,  # Groq's free tier caps gpt-oss-120b at 8,000 TPM total
-                                  # (input+output combined) - 6000 leaves headroom for the
-                                  # prompt itself and stays safely under that ceiling
+            "max_tokens": 7000,  # gpt-oss-120b's free tier is 8,000 TPM total (input+output);
+                                  # this leaves headroom for the prompt while allowing enough
+                                  # room for a full script now that reasoning is capped low
+            "reasoning_effort": "low",  # gpt-oss-120b is a reasoning model - without this, it can
+                                          # spend the whole token budget on internal chain-of-thought
+                                          # and return an EMPTY final answer, which is what caused
+                                          # the JSONDecodeError ("Expecting value" on an empty string)
         },
         timeout=120,
     )
@@ -96,6 +100,13 @@ def generate_script(topic: dict) -> dict:
         content = content.split("\n", 1)[1] if "\n" in content else content
         content = content.rsplit("```", 1)[0]
 
+    if not content:
+        raise ValueError(
+            "Groq returned an empty response for the script generation call. "
+            "This usually means the model spent its entire token budget on internal "
+            "reasoning and never wrote the actual answer - try raising max_tokens or "
+            "lowering reasoning_effort further."
+        )
     script = json.loads(content)
     return script
 
@@ -122,6 +133,7 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.8,
             "max_tokens": 4000,
+            "reasoning_effort": "low",
         },
         timeout=90,
     )
@@ -132,6 +144,12 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
         content = content.split("\n", 1)[1] if "\n" in content else content
         content = content.rsplit("```", 1)[0]
 
+    if not content:
+        raise ValueError(
+            "Groq returned an empty response for the top-up call. This usually means "
+            "the model spent its entire token budget on internal reasoning and never "
+            "wrote the actual answer - try raising max_tokens or lowering reasoning_effort further."
+        )
     result = json.loads(content)
     return result["segments"]
 
