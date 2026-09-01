@@ -1,9 +1,7 @@
 """
 Stage 1: Topic generation.
-Picks a new "catalog" style car topic (e.g. "12 Concept Cars That Never
-Made It to Production") in the Car Professor format, avoiding topics
-already used. Uses Groq's free API (https://console.groq.com) - no cost,
-just a free API key stored as a GitHub secret (GROQ_API_KEY).
+Picks a new "catalog" style car topic in the Car Professor format, avoiding
+topics already used. Uses Groq's free API.
 """
 
 import os
@@ -13,21 +11,20 @@ from pathlib import Path
 from groq_client import groq_post
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "openai/gpt-oss-120b"  # Groq deprecated the llama-3.3 chat models in 2026; this is their current recommended general-purpose model
+GROQ_MODEL = "openai/gpt-oss-120b"  # Groq deprecated the llama-3.3 chat models in 2026
 USED_TOPICS_FILE = Path(__file__).parent.parent / "data" / "used_topics.json"
 
 TOPIC_PROMPT = """You generate YouTube video topics for "Car Professor," a channel
 that teaches people about cars in 8-15 minute videos using a "catalog" format:
 a numbered list of N distinct items (cars, engines, failures, records, etc.),
-each with its own self-contained mini-story (what it was, what made it notable,
-what happened to it).
+each with its own self-contained mini-story.
 
 Rules:
 - Topic must be about real, factual automotive history/trivia (no fiction)
 - Must fit a catalog format: "N of X" (e.g. "10 Cars Banned From Racing")
-- N should be between 8 and 15
+- N should be 12 (a full 6x2 grid looks best in the intro)
 - Must NOT be any of these already-used topics: {used_topics}
-- Pick something with strong visual variety (different cars/eras look different)
+- Pick something with strong visual variety
 - Prefer topics with genuinely interesting, little-known stories
 
 Respond with ONLY valid JSON, no markdown fences, no preamble:
@@ -55,7 +52,6 @@ def save_used_topic(title: str):
 def generate_topic() -> dict:
     api_key = os.environ["GROQ_API_KEY"]
     used_topics = load_used_topics()
-
     prompt = TOPIC_PROMPT.format(used_topics=json.dumps(used_topics))
 
     resp = groq_post(
@@ -65,28 +61,23 @@ def generate_topic() -> dict:
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.9,
-            "reasoning_effort": "low",  # gpt-oss-120b is a reasoning model - keep effort low so
-                                          # token budget goes toward the actual JSON answer
+            "reasoning_effort": "low",
         },
         timeout=60,
     )
     content = resp.json()["choices"][0]["message"]["content"].strip()
-
     if content.startswith("```"):
         content = content.strip("`")
         content = content.split("\n", 1)[1] if "\n" in content else content
         content = content.rsplit("```", 1)[0]
-
+    content = content.strip()
     if not content:
         raise ValueError(
-            "Groq returned an empty response for the topic generation call. This usually "
-            "means the model spent its entire token budget on internal reasoning and never "
-            "wrote the actual answer - try raising max_tokens or lowering reasoning_effort further."
+            "Groq returned an empty response for topic generation - likely spent the token "
+            "budget on reasoning. Try lowering reasoning_effort."
         )
-    topic = json.loads(content)
-    return topic
+    return json.loads(content)
 
 
 if __name__ == "__main__":
-    topic = generate_topic()
-    print(json.dumps(topic, indent=2))
+    print(json.dumps(generate_topic(), indent=2))

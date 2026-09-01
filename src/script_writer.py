@@ -1,9 +1,7 @@
 """
 Stage 2: Script generation.
 Writes the full narration script for a topic, matching the "catalog" formula:
-cold open per item (no transition fluff), tight self-contained story arc,
-~150-260 words per segment. Also produces an image search query per segment
-for the image-sourcing stage.
+a short intro, then a cold-open self-contained story per item.
 """
 
 import os
@@ -12,7 +10,7 @@ import json
 from groq_client import groq_post
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "openai/gpt-oss-120b"  # Groq deprecated the llama-3.3 chat models in 2026; this is their current recommended general-purpose model
+GROQ_MODEL = "openai/gpt-oss-120b"  # Groq deprecated the llama-3.3 chat models in 2026
 
 SCRIPT_PROMPT = """Write the full narration script for a YouTube video titled:
 "{title}"
@@ -21,8 +19,11 @@ Theme: {theme}
 Number of items: {item_count}
 
 Format rules (match this exactly - it's a proven formula):
-- Each item gets its own segment. Start COLD with the item's name/title - no
-  "next up" or "let's talk about" transitions.
+- Open with a short INTRO (2-4 sentences): hook the viewer on the theme and
+  briefly preview what the video covers, in plain factual language - no
+  "welcome back to the channel," no host chatter, no rhetorical questions.
+- After the intro, each item gets its own segment. Start COLD with the item's
+  name/title - no "next up" or "let's talk about" transitions.
 - Each segment: 150-260 words. Tell a tight story - what it was, the key
   twist/event/fact that makes it notable, and what happened to it (the "fate").
 - Plain, punchy, factual narration. No fluff, no rhetorical questions, no host
@@ -31,13 +32,15 @@ Format rules (match this exactly - it's a proven formula):
 - End with a short outro (2-3 sentences: ask viewers what they want to see
   next, like/subscribe).
 
-Also provide, for EACH segment, a short "image_query" - a specific search
-term (3-6 words) that would find real photos of that exact car/subject on
-Wikimedia Commons.
+Also provide an "intro_image_query" (3-6 words) for a general establishing
+visual - and, for EACH segment, a short "image_query" (3-6 words) that would
+find real photos of that exact car/subject on Wikimedia Commons.
 
 Respond with ONLY valid JSON, no markdown fences, no preamble:
 {{
   "title": "{title}",
+  "intro": "the intro narration text",
+  "intro_image_query": "search terms",
   "segments": [
     {{"name": "item name", "script": "the narration text", "image_query": "search terms"}}
   ],
@@ -53,13 +56,11 @@ The video ALREADY covers these items - do NOT repeat any of them:
 
 Write {extra_count} MORE items in the exact same format and style:
 - Start COLD with the item's name/title - no transition phrases
-- Each segment: 150-260 words, same tight story structure (what it was, the
-  key twist/fact, what happened to it)
+- Each segment: 150-260 words, same tight story structure
 - Plain, punchy, factual narration, no fluff or host opinions
 - All facts must be real and accurate
 
-Also provide an "image_query" per segment (3-6 words, for Wikimedia Commons
-image search).
+Also provide an "image_query" per segment (3-6 words, for Wikimedia Commons).
 
 Respond with ONLY valid JSON, no markdown fences, no preamble:
 {{
@@ -68,6 +69,15 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
   ]
 }}
 """
+
+
+def _extract_json(content: str) -> str:
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        content = content.split("\n", 1)[1] if "\n" in content else content
+        content = content.rsplit("```", 1)[0]
+    return content.strip()
 
 
 def generate_script(topic: dict) -> dict:
@@ -83,40 +93,22 @@ def generate_script(topic: dict) -> dict:
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 7000,  # gpt-oss-120b's free tier is 8,000 TPM total (input+output);
-                                  # this leaves headroom for the prompt while allowing enough
-                                  # room for a full script now that reasoning is capped low
-            "reasoning_effort": "low",  # gpt-oss-120b is a reasoning model - without this, it can
-                                          # spend the whole token budget on internal chain-of-thought
-                                          # and return an EMPTY final answer, which is what caused
-                                          # the JSONDecodeError ("Expecting value" on an empty string)
+            "max_tokens": 7000,
+            "reasoning_effort": "low",  # gpt-oss-120b reasons by default and can burn the
+                                          # whole budget on chain-of-thought, returning empty content
         },
         timeout=120,
     )
-    content = resp.json()["choices"][0]["message"]["content"].strip()
-
-    if content.startswith("```"):
-        content = content.strip("`")
-        content = content.split("\n", 1)[1] if "\n" in content else content
-        content = content.rsplit("```", 1)[0]
-
+    content = _extract_json(resp.json()["choices"][0]["message"]["content"])
     if not content:
         raise ValueError(
-            "Groq returned an empty response for the script generation call. "
-            "This usually means the model spent its entire token budget on internal "
-            "reasoning and never wrote the actual answer - try raising max_tokens or "
-            "lowering reasoning_effort further."
+            "Groq returned an empty response for script generation - likely spent the "
+            "token budget on reasoning. Try raising max_tokens or lowering reasoning_effort."
         )
-    script = json.loads(content)
-    return script
+    return json.loads(content)
 
 
 def generate_additional_segments(topic: dict, existing_names: list, extra_count: int) -> list:
-    """
-    Top-up call used when the initial script comes in short of the target
-    video length. Asks for more items in the same format, explicitly
-    excluding anything already covered.
-    """
     api_key = os.environ["GROQ_API_KEY"]
     prompt = TOPUP_PROMPT.format(
         title=topic["title"],
@@ -137,27 +129,16 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
         },
         timeout=90,
     )
-    content = resp.json()["choices"][0]["message"]["content"].strip()
-
-    if content.startswith("```"):
-        content = content.strip("`")
-        content = content.split("\n", 1)[1] if "\n" in content else content
-        content = content.rsplit("```", 1)[0]
-
+    content = _extract_json(resp.json()["choices"][0]["message"]["content"])
     if not content:
         raise ValueError(
-            "Groq returned an empty response for the top-up call. This usually means "
-            "the model spent its entire token budget on internal reasoning and never "
-            "wrote the actual answer - try raising max_tokens or lowering reasoning_effort further."
+            "Groq returned an empty response for the top-up call - likely spent the token "
+            "budget on reasoning. Try raising max_tokens or lowering reasoning_effort."
         )
-    result = json.loads(content)
-    return result["segments"]
+    return json.loads(content)["segments"]
 
 
 if __name__ == "__main__":
-    import sys
     from topic_generator import generate_topic
-
     topic = generate_topic()
-    script = generate_script(topic)
-    print(json.dumps(script, indent=2))
+    print(json.dumps(generate_script(topic), indent=2))
