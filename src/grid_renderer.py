@@ -24,7 +24,7 @@ _FONT_DIR = Path(__file__).parent / "assets" / "fonts"
 FONT_DISPLAY = str(_FONT_DIR / "LuckiestGuy-Regular.ttf")
 FONT_FALLBACK = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-TITLE_AREA_HEIGHT = 150
+TITLE_AREA_HEIGHT = 175
 GRID_TOP = TITLE_AREA_HEIGHT + 12
 GRID_COLS = 6
 ACCENT_COLOR = "#e02020"
@@ -51,7 +51,7 @@ def _wrap_words(draw, words, font, max_width):
 
 
 def _draw_title(draw, title, canvas_w, accent):
-    font_size = 66
+    font_size = 80  # bigger title (was 66)
     font = _font(font_size)
     max_width = canvas_w - 90
     words = title.upper().split()
@@ -118,7 +118,7 @@ def render_grid(item_names, image_paths, title, accent=False):
     grid_height = GRID_H - GRID_TOP
     cell_w = GRID_W // cols
     cell_h = grid_height // rows
-    circle_size = int(min(cell_w, cell_h) * 0.72)
+    circle_size = int(min(cell_w, cell_h) * 0.86)  # bigger circles (was 0.72)
 
     cells = []
     for idx, (name, img_path) in enumerate(items):

@@ -14,9 +14,9 @@ variant that still cuts cleanly.
 from PIL import Image, ImageDraw, ImageOps
 import numpy as np
 
-OFF_WHITE = (245, 243, 238)
+OFF_WHITE = (250, 246, 232)   # warmer cream (was 245,243,238 - too grey/white)
 RING_COLOR = (20, 20, 20)
-RING_WIDTH = 10          # black outline thickness (at full grid resolution)
+RING_WIDTH = 6                # thinner black outline (was 10)
 SUBJECT_FILL = 0.82      # fraction of the circle diameter the subject's longest side fills
                           # (< 1.0 so the WHOLE car fits with breathing room, per the reference)
 
