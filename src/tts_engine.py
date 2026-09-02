@@ -20,7 +20,7 @@ from pathlib import Path
 
 # --- Edge-TTS (primary) ---
 EDGE_VOICE = "en-US-EricNeural"   # chosen narrator
-EDGE_RATE = "+50%"                # 1.5x speed
+EDGE_RATE = "+25%"                # 1.25x speed
 
 # --- Piper (fallback) ---
 PIPER_VOICE = "en_US-bryce-medium"

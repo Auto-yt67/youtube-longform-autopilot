@@ -25,6 +25,7 @@ FONT_DISPLAY = str(_FONT_DIR / "LuckiestGuy-Regular.ttf")
 FONT_FALLBACK = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 TITLE_AREA_HEIGHT = 175
+TITLE_TOP_MARGIN = 55   # push the title down from the very top edge
 GRID_TOP = TITLE_AREA_HEIGHT + 12
 GRID_COLS = 6
 ACCENT_COLOR = "#e02020"
@@ -65,7 +66,7 @@ def _draw_title(draw, title, canvas_w, accent):
 
     line_height = font_size + 10
     total_height = line_height * len(lines)
-    y = (TITLE_AREA_HEIGHT - total_height) // 2
+    y = TITLE_TOP_MARGIN + (TITLE_AREA_HEIGHT - total_height) // 2
 
     space_w = draw.textlength(" ", font=font)
     global_idx = 0
@@ -78,6 +79,23 @@ def _draw_title(draw, title, canvas_w, accent):
             x += draw.textlength(w, font=font) + space_w
             global_idx += 1
         y += line_height
+
+
+def _shorten_label(name: str, max_words: int = 3) -> str:
+    """
+    Trim a full item name down to a short label for under the circle.
+    Strips parentheticals and anything after a dash/em-dash (which is usually
+    a description, not the name), then caps the word count. So
+    "Volvo 240 (1974) - Side Impact Protection System" -> "Volvo 240".
+    """
+    import re
+    s = re.sub(r"\([^)]*\)", "", name)          # drop parentheticals
+    s = re.split(r"\s[-\u2013\u2014]\s", s)[0]   # keep only text before " - " / " – " / " — "
+    s = re.sub(r"\s+", " ", s).strip()
+    words = s.split()
+    if len(words) > max_words:
+        s = " ".join(words[:max_words])
+    return s or name
 
 
 def _draw_label(draw, text, cx, top, max_width, font_size=30):
@@ -129,7 +147,7 @@ def render_grid(item_names, image_paths, title, accent=False):
 
         circle = make_circle(img_path, circle_size, cutout=True)
         canvas.paste(circle, (cx - circle_size // 2, cy - circle_size // 2), circle)
-        _draw_label(draw, name, cx, cy + circle_size // 2 + 12, cell_w - 16)
+        _draw_label(draw, _shorten_label(name), cx, cy + circle_size // 2 + 12, cell_w - 16)
 
         cells.append({
             "name": name, "cx": cx, "cy": cy,
