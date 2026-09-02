@@ -128,7 +128,8 @@ def run():
     # render, so grid and zoom stay perfectly aligned.
     grid_names = [s["name"] for s in segments]
     grid_reps = representative_images
-    grid_canvas, cells = render_grid(grid_names, grid_reps, script["title"])
+    # Video's opening grid: no colored accent word (accent stays on the thumbnail only)
+    grid_canvas, cells = render_grid(grid_names, grid_reps, script["title"], accent=False)
     grid_path = WORKDIR / "grid.png"
     grid_canvas.save(grid_path)
 

@@ -1,39 +1,39 @@
 """
 Shared grid renderer.
 
-This is the heart of the "catalog" format: a single function that renders the
-grid of circular photos with a title, used for BOTH the thumbnail and the
-video's opening shot. It also returns the pixel-space bounding box of each
-grid cell, so the video builder can zoom into each item's region in turn.
+Renders the grid of circular car cutouts with a title, used for BOTH the
+thumbnail and the video's opening shot. Returns per-cell pixel coordinates so
+the video builder can zoom into each item.
 
-Keeping this in one place guarantees the thumbnail and the video's opening
-grid are visually identical - same layout, same circles, same labels.
+Circles use background-removed cutouts on off-white with a black ring
+(cutout.make_circle). The title uses the bubbly Luckiest Guy display font.
+The colored accent word is drawn only when accent=True - the pipeline enables
+it for the thumbnail and disables it for the video's opening grid.
 """
 
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
-# Full-resolution canvas (video frame size). The thumbnail is just this,
-# downscaled to 1280x720.
+from cutout import make_circle
+
 GRID_W, GRID_H = 1920, 1080
-FONT_PATH_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # present on Ubuntu runners
 
-TITLE_AREA_HEIGHT = 150   # reserved band at the top for the title text
+# Luckiest Guy (bubbly display font) is downloaded into src/assets/fonts by the
+# GitHub Actions workflow. Fall back to DejaVu Bold if it's somehow missing.
+_FONT_DIR = Path(__file__).parent / "assets" / "fonts"
+FONT_DISPLAY = str(_FONT_DIR / "LuckiestGuy-Regular.ttf")
+FONT_FALLBACK = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+TITLE_AREA_HEIGHT = 150
 GRID_TOP = TITLE_AREA_HEIGHT + 12
 GRID_COLS = 6
 ACCENT_COLOR = "#e02020"
 MAX_GRID_ITEMS = 12
 
 
-def _circle_crop(img_path: str, size: int) -> Image.Image:
-    img = Image.open(img_path).convert("RGB")
-    img = ImageOps.fit(img, (size, size), Image.LANCZOS)
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, size, size), fill=255)
-    out = Image.new("RGBA", (size, size))
-    out.paste(img, (0, 0), mask)
-    return out
+def _font(size: int) -> ImageFont.FreeTypeFont:
+    path = FONT_DISPLAY if Path(FONT_DISPLAY).exists() else FONT_FALLBACK
+    return ImageFont.truetype(path, size)
 
 
 def _wrap_words(draw, words, font, max_width):
@@ -50,22 +50,20 @@ def _wrap_words(draw, words, font, max_width):
     return lines
 
 
-def _draw_title(draw, title, canvas_w):
-    """Bold uppercase title, centered. Colors the word after a leading number
-    as a red accent (e.g. "12 NOTORIOUS Cars...")."""
-    font_size = 68
-    font = ImageFont.truetype(FONT_PATH_BOLD, font_size)
+def _draw_title(draw, title, canvas_w, accent):
+    font_size = 66
+    font = _font(font_size)
     max_width = canvas_w - 90
     words = title.upper().split()
-    accent_idx = 1 if len(words) >= 2 and words[0][:1].isdigit() else None
+    accent_idx = 1 if (accent and len(words) >= 2 and words[0][:1].isdigit()) else None
 
     lines = _wrap_words(draw, words, font, max_width)
-    while len(lines) > 2 and font_size > 38:
+    while len(lines) > 2 and font_size > 36:
         font_size -= 5
-        font = ImageFont.truetype(FONT_PATH_BOLD, font_size)
+        font = _font(font_size)
         lines = _wrap_words(draw, words, font, max_width)
 
-    line_height = font_size + 8
+    line_height = font_size + 10
     total_height = line_height * len(lines)
     y = (TITLE_AREA_HEIGHT - total_height) // 2
 
@@ -82,9 +80,8 @@ def _draw_title(draw, title, canvas_w):
         y += line_height
 
 
-def _draw_label(draw, text, cx, top, max_width, font_size=26):
-    """Plain bold black label - sits on white, so no outline needed."""
-    font = ImageFont.truetype(FONT_PATH_BOLD, font_size)
+def _draw_label(draw, text, cx, top, max_width, font_size=30):
+    font = _font(font_size)
     lines = _wrap_words(draw, text.upper().split(), font, max_width)
     y = top
     for line_words in lines:
@@ -94,23 +91,17 @@ def _draw_label(draw, text, cx, top, max_width, font_size=26):
         y += font_size + 4
 
 
-def render_grid(item_names: list, image_paths: list, title: str):
+def render_grid(item_names, image_paths, title, accent=False):
     """
     Render the full grid image and return (canvas, cells).
 
-    canvas: a PIL RGB Image at GRID_W x GRID_H.
-    cells:  a list of dicts, one per rendered item, each:
-              {"name", "cx", "cy", "x0", "y0", "x1", "y1"}
-            giving the center and bounding box (in pixels) of that item's
-            cell - used by the video builder to zoom into each item.
-
-    Only fills complete rows (drops leftover items) so the grid is always a
-    clean rectangle, never lopsided.
+    accent: color the word after a leading number red (thumbnail only). The
+            video's opening grid passes accent=False.
     """
     canvas = Image.new("RGB", (GRID_W, GRID_H), "white")
     draw = ImageDraw.Draw(canvas)
 
-    _draw_title(draw, title, GRID_W)
+    _draw_title(draw, title, GRID_W, accent)
 
     items = [
         (n, p) for n, p in zip(item_names, image_paths)
@@ -119,7 +110,6 @@ def render_grid(item_names: list, image_paths: list, title: str):
 
     cols = GRID_COLS
     if len(items) >= cols:
-        # keep only complete rows
         items = items[:(len(items) // cols) * cols]
     if not items:
         raise ValueError("No usable images for the grid")
@@ -128,7 +118,7 @@ def render_grid(item_names: list, image_paths: list, title: str):
     grid_height = GRID_H - GRID_TOP
     cell_w = GRID_W // cols
     cell_h = grid_height // rows
-    circle_size = int(min(cell_w, cell_h) * 0.66)
+    circle_size = int(min(cell_w, cell_h) * 0.72)
 
     cells = []
     for idx, (name, img_path) in enumerate(items):
@@ -137,18 +127,14 @@ def render_grid(item_names: list, image_paths: list, title: str):
         cx = col * cell_w + cell_w // 2
         cy = GRID_TOP + row * cell_h + int(cell_h * 0.34)
 
-        circle = _circle_crop(img_path, circle_size)
+        circle = make_circle(img_path, circle_size, cutout=True)
         canvas.paste(circle, (cx - circle_size // 2, cy - circle_size // 2), circle)
-        _draw_label(draw, name, cx, cy + circle_size // 2 + 10, cell_w - 16)
+        _draw_label(draw, name, cx, cy + circle_size // 2 + 12, cell_w - 16)
 
         cells.append({
-            "name": name,
-            "cx": cx,
-            "cy": cy,
-            "x0": col * cell_w,
-            "y0": GRID_TOP + row * cell_h,
-            "x1": col * cell_w + cell_w,
-            "y1": GRID_TOP + row * cell_h + cell_h,
+            "name": name, "cx": cx, "cy": cy,
+            "x0": col * cell_w, "y0": GRID_TOP + row * cell_h,
+            "x1": col * cell_w + cell_w, "y1": GRID_TOP + row * cell_h + cell_h,
         })
 
     return canvas, cells
