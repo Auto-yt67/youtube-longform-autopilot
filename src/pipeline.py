@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from topic_generator import generate_topic, save_used_topic
 from script_writer import generate_script, generate_additional_segments
-from image_fetcher import download_images
+from image_fetcher import download_images, download_images_with_fallback
 from tts_engine import synthesize_segments
 from grid_renderer import render_grid, MAX_GRID_ITEMS
 from video_builder import build_video
@@ -33,6 +33,19 @@ MAX_SEGMENTS = 15
 
 def _estimate_seconds(text: str) -> float:
     return len(text.split()) / WORDS_PER_MINUTE * 60
+
+
+def _retitle_to_count(title: str, count: int) -> str:
+    """
+    Replace the leading number in a catalog title with the actual final count.
+    "12 Cars That Saved Their Brands" + count=6 -> "6 Cars That Saved Their Brands".
+    If the title doesn't start with a number, leave it unchanged.
+    """
+    import re
+    m = re.match(r"^\s*(\d+)\b(.*)$", title, flags=re.DOTALL)
+    if not m:
+        return title
+    return f"{count}{m.group(2)}"
 
 
 def _total_estimated_seconds(script: dict) -> float:
@@ -93,7 +106,7 @@ def run():
     for i, seg in enumerate(segments):
         out_dir = WORKDIR / "images" / f"seg_{i:02d}"
         try:
-            paths = download_images(seg["image_query"], out_dir, limit=4)
+            paths = download_images_with_fallback(seg["image_query"], seg["name"], out_dir, limit=4)
         except Exception as e:
             print(f"  ! unexpected failure sourcing images for '{seg['name']}' ({e}) - treating as 0 images")
             paths = []
@@ -110,6 +123,23 @@ def run():
         segments = [segments[i] for i in usable]
         images_by_segment = {new_i: images_by_segment[old_i] for new_i, old_i in enumerate(usable)}
         representative_images = [representative_images[i] for i in usable]
+
+    # Cap to the grid size so the title number, the grid, and the narration all
+    # cover exactly the same set of cars. The grid only holds MAX_GRID_ITEMS in
+    # complete rows; anything beyond that would be narrated but never shown.
+    from grid_renderer import GRID_COLS
+    grid_capacity = min(len(segments) // GRID_COLS * GRID_COLS, MAX_GRID_ITEMS) if len(segments) >= GRID_COLS else len(segments)
+    if grid_capacity and len(segments) > grid_capacity:
+        segments = segments[:grid_capacity]
+        images_by_segment = {i: images_by_segment[i] for i in range(grid_capacity)}
+        representative_images = representative_images[:grid_capacity]
+
+    # Reconcile the title's number to the actual count of cars that survived,
+    # so the thumbnail/grid never say "12" while showing 6.
+    final_count = len(segments)
+    script["title"] = _retitle_to_count(script["title"], final_count)
+    print(f"  Final car count after image sourcing: {final_count}")
+    print(f"  Title reconciled to: {script['title']}")
 
     if not intro_images and images_by_segment.get(0):
         intro_images = images_by_segment[0]

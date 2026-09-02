@@ -120,6 +120,50 @@ def download_images(query: str, out_dir: Path, limit: int = 4) -> list:
     return paths
 
 
+def _query_variations(primary_query: str, item_name: str) -> list:
+    """
+    Build a list of progressively broader search queries to try, so an item is
+    less likely to end up with zero images just because the specific query was
+    too narrow. Order matters - most specific first.
+    """
+    import re
+    variations = [primary_query]
+
+    # the item name itself (often cleaner than a hand-written query)
+    if item_name and item_name not in variations:
+        variations.append(item_name)
+
+    # item name with parentheticals stripped, e.g. "BMW 3 Series (E30)" -> "BMW 3 Series"
+    stripped = re.sub(r"\([^)]*\)", "", item_name).strip()
+    if stripped and stripped not in variations:
+        variations.append(stripped)
+
+    # item name with years stripped, e.g. "Ford Model T 1908" -> "Ford Model T"
+    no_years = re.sub(r"\b(1[89]\d{2}|20\d{2})\b", "", stripped or item_name).strip()
+    no_years = re.sub(r"\s+", " ", no_years)
+    if no_years and no_years not in variations:
+        variations.append(no_years)
+
+    return variations
+
+
+def download_images_with_fallback(primary_query: str, item_name: str,
+                                   out_dir: Path, limit: int = 4) -> list:
+    """
+    Try the primary query, then progressively broader fallbacks, stopping as
+    soon as one yields usable images. Dramatically reduces how often a segment
+    ends up with zero images (which is what caused the grid to show fewer cars
+    than the title claimed).
+    """
+    for q in _query_variations(primary_query, item_name):
+        paths = download_images(q, out_dir, limit=limit)
+        if paths:
+            if q != primary_query:
+                print(f"    (used fallback query '{q}' for '{item_name}')")
+            return paths
+    return []
+
+
 if __name__ == "__main__":
     results = search_images("Bugatti Veyron", limit=4)
     for r in results:

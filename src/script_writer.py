@@ -22,6 +22,8 @@ Format rules (match this exactly - it's a proven formula):
 - Open with a short INTRO (2-4 sentences): hook the viewer on the theme and
   briefly preview what the video covers, in plain factual language - no
   "welcome back to the channel," no host chatter, no rhetorical questions.
+  End the intro with a short transition line like "Let's get into it." or
+  "Let's get started." as its final sentence.
 - After the intro, each item gets its own segment. Start COLD with the item's
   name/title - no "next up" or "let's talk about" transitions.
 - Each segment: 150-260 words. Tell a tight story - what it was, the key

@@ -105,6 +105,11 @@ def _segment_photos_clip(image_paths: list, duration: float):
     return concatenate_videoclips(clips, method="compose")
 
 
+def _hold_grid_clip(grid_image_path, duration):
+    """Static full-grid frame for a given duration (used for the post-intro pause)."""
+    return _cover_fit_clip(grid_image_path, duration)
+
+
 def build_video(segments, audio_results, images_by_segment, grid_image_path, cells, out_path):
     """
     segments:          list of {name, script, image_query}
@@ -113,50 +118,64 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
     images_by_segment: {segment_index: [local image paths]}
     grid_image_path:   path to the rendered full grid PNG (from grid_renderer)
     cells:             per-cell coordinates from grid_renderer.render_grid
+
+    Motion per item: zoom IN from the full grid into the item's cell, hold on
+    the item's photos, then zoom OUT back to the full grid - so each car gets a
+    clean "zoom out of this one, zoom into the next" transition.
     """
     grid_img = _load_rgb_array(grid_image_path)
     clips = []
+
+    PAUSE_AFTER_INTRO = 1.0  # brief beat on the grid before the first car
+    ZOOM_IN_DUR = 0.9
+    ZOOM_OUT_DUR = 0.7
 
     # --- Intro: hold on the full grid while the intro narration plays ---
     intro_audio = AudioFileClip(audio_results[0]["wav_path"])
     intro_clip = _cover_fit_clip(grid_image_path, intro_audio.duration).set_audio(intro_audio)
     clips.append(intro_clip)
 
-    # --- Each segment: quick zoom into its cell, then show its photos ---
+    # --- Brief silent pause on the grid after the intro ("...let's get into it" [beat]) ---
+    clips.append(_hold_grid_clip(grid_image_path, PAUSE_AFTER_INTRO))
+
+    # --- Each segment: zoom in -> photos -> zoom out ---
     for i, seg in enumerate(segments):
         audio = AudioFileClip(audio_results[i + 1]["wav_path"])
         seg_dur = audio.duration
         photos = images_by_segment.get(i, [])
         cell = cells[i] if i < len(cells) else None
 
-        # Zoom transition takes the first ~1.2s (or 25% of a very short segment)
-        zoom_dur = min(1.2, seg_dur * 0.25) if cell else 0.0
-        photos_dur = seg_dur - zoom_dur
+        if cell:
+            # carve zoom-in and zoom-out from the segment's own duration,
+            # scaling them down for very short segments so photos still show
+            zin = min(ZOOM_IN_DUR, seg_dur * 0.22)
+            zout = min(ZOOM_OUT_DUR, seg_dur * 0.18)
+            photos_dur = max(0.1, seg_dur - zin - zout)
 
-        parts = []
-        if cell and zoom_dur > 0:
-            parts.append(_zoom_into_cell_clip(grid_img, cell, zoom_dur, zoom_out=False))
-        photos_clip = _segment_photos_clip(photos, photos_dur)
-        if photos_clip is not None:
-            parts.append(photos_clip)
-        elif cell:
-            # no photos for this item - just hold the zoomed-in cell
-            parts.append(_zoom_into_cell_clip(grid_img, cell, photos_dur, zoom_out=False)
-                         .set_duration(photos_dur))
+            parts = [_zoom_into_cell_clip(grid_img, cell, zin, zoom_out=False)]
+            photos_clip = _segment_photos_clip(photos, photos_dur)
+            if photos_clip is not None:
+                parts.append(photos_clip)
+            else:
+                # no photos - hold the zoomed-in cell during the middle
+                parts.append(_zoom_into_cell_clip(grid_img, cell, photos_dur, zoom_out=False)
+                             .set_duration(photos_dur))
+            parts.append(_zoom_into_cell_clip(grid_img, cell, zout, zoom_out=True))
+        else:
+            # segment with no grid cell (shouldn't happen after reconciliation,
+            # but safe) - just show its photos full-frame
+            photos_clip = _segment_photos_clip(photos, seg_dur)
+            parts = [photos_clip] if photos_clip is not None else [
+                _cover_fit_clip(grid_image_path, seg_dur)
+            ]
 
-        if not parts:
-            continue
         seg_visual = concatenate_videoclips(parts, method="compose") if len(parts) > 1 else parts[0]
         seg_visual = seg_visual.set_duration(seg_dur).set_audio(audio)
         clips.append(seg_visual)
 
-    # --- Outro: zoom back out to the full grid ---
+    # --- Outro: hold on the full grid ---
     outro_audio = AudioFileClip(audio_results[-1]["wav_path"])
-    if cells:
-        outro_visual = _zoom_into_cell_clip(grid_img, cells[-1], outro_audio.duration, zoom_out=True)
-    else:
-        outro_visual = _cover_fit_clip(grid_image_path, outro_audio.duration)
-    outro_visual = outro_visual.set_audio(outro_audio)
+    outro_visual = _cover_fit_clip(grid_image_path, outro_audio.duration).set_audio(outro_audio)
     clips.append(outro_visual)
 
     final = concatenate_videoclips(clips, method="compose")
