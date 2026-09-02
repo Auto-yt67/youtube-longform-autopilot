@@ -61,7 +61,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.u2net
-          key: u2net-model-v1
+          key: u2netp-model-v1
+
+      - name: Pre-fetch lightweight rembg model (u2netp)
+        if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
+        run: |
+          # Force the small u2netp model (~4MB). The rembg default (bria-rmbg,
+          # ~1GB) OOM-kills the runner. This warms the ~/.u2net cache.
+          python -c "from rembg import new_session; new_session('u2netp')"
+          ls -la ~/.u2net || true
 
       - name: Download display font
         if: github.event_name != 'schedule' || steps.time_check.outputs.run == 'true'
