@@ -110,6 +110,18 @@ def _hold_grid_clip(grid_image_path, duration):
     return _cover_fit_clip(grid_image_path, duration)
 
 
+def _hold_cell_clip(grid_img, cell, duration):
+    """
+    Static frame of the fully-zoomed-in cell, held for `duration`. Used as a
+    brief beat between the zoom-in and the zoom-out so the transition doesn't
+    feel rushed. Implemented as a zoom clip frozen at its end (fully zoomed in).
+    """
+    frozen = _zoom_into_cell_clip(grid_img, cell, 0.001, zoom_out=False)
+    last = frozen.get_frame(0.001)
+    from moviepy.editor import ImageClip
+    return ImageClip(last).set_duration(duration)
+
+
 def build_video(segments, audio_results, images_by_segment, grid_image_path, cells, out_path):
     """
     segments:          list of {name, script, image_query}
@@ -129,6 +141,7 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
     PAUSE_AFTER_INTRO = 1.0  # brief beat on the grid before the first car
     ZOOM_IN_DUR = 0.9
     ZOOM_OUT_DUR = 0.7
+    HOLD_BEFORE_ZOOMOUT = 0.5  # brief beat on the zoomed-in circle before pulling back out
 
     # --- Intro: hold on the full grid while the intro narration plays ---
     intro_audio = AudioFileClip(audio_results[0]["wav_path"])
@@ -146,11 +159,12 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
         cell = cells[i] if i < len(cells) else None
 
         if cell:
-            # carve zoom-in and zoom-out from the segment's own duration,
+            # carve zoom-in, hold, and zoom-out from the segment's own duration,
             # scaling them down for very short segments so photos still show
-            zin = min(ZOOM_IN_DUR, seg_dur * 0.22)
-            zout = min(ZOOM_OUT_DUR, seg_dur * 0.18)
-            photos_dur = max(0.1, seg_dur - zin - zout)
+            zin = min(ZOOM_IN_DUR, seg_dur * 0.20)
+            zout = min(ZOOM_OUT_DUR, seg_dur * 0.16)
+            hold = min(HOLD_BEFORE_ZOOMOUT, seg_dur * 0.10)
+            photos_dur = max(0.1, seg_dur - zin - hold - zout)
 
             parts = [_zoom_into_cell_clip(grid_img, cell, zin, zoom_out=False)]
             photos_clip = _segment_photos_clip(photos, photos_dur)
@@ -160,6 +174,8 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
                 # no photos - hold the zoomed-in cell during the middle
                 parts.append(_zoom_into_cell_clip(grid_img, cell, photos_dur, zoom_out=False)
                              .set_duration(photos_dur))
+            # brief hold on the zoomed-in circle, then zoom back out
+            parts.append(_hold_cell_clip(grid_img, cell, hold))
             parts.append(_zoom_into_cell_clip(grid_img, cell, zout, zoom_out=True))
         else:
             # segment with no grid cell (shouldn't happen after reconciliation,
