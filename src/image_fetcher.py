@@ -146,7 +146,7 @@ def _score_image(img: dict) -> float:
     )
 
 
-
+def download_images(query: str, out_dir: Path, limit: int = 4) -> list:
     """Search + download images for a segment. Returns list of local file paths,
     ordered best-first by the cheap title/aspect score (full-car shots ranked
     above part/detail shots and portrait/people images).
