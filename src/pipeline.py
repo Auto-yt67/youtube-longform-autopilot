@@ -211,6 +211,32 @@ def run():
     print(f"  Final: {final_count} cars, {total_duration / 60:.1f} min")
     print(f"  Title: {script['title']}")
 
+    # --- Add smooth back-reference transitions, now that the car order is final ---
+    print("\n[4b/6] Adding smooth transitions between cars...")
+    from script_writer import add_transitions
+    from tts_engine import synthesize, get_wav_duration
+    before = [s["script"] for s in segments]
+    segments = add_transitions(segments)
+
+    # Re-synthesize only the segments whose opening actually changed, and update
+    # their audio entries (transitions slightly change length). Intro/outro
+    # audio is untouched. Keeps audio in sync with the new narration.
+    name_to_audio = {a["name"]: a for a in audio_results}
+    changed = 0
+    for i, seg in enumerate(segments):
+        if seg["script"] == before[i]:
+            continue  # unchanged (e.g. the first car's clean cold open)
+        changed += 1
+        wav_path = audio_dir / f"segment_{i:02d}.wav"
+        synthesize(seg["script"], wav_path)
+        dur = get_wav_duration(wav_path)
+        entry = name_to_audio.get(seg["name"])
+        if entry is not None:
+            entry["wav_path"] = str(wav_path)
+            entry["duration"] = dur
+    total_duration = sum(a["duration"] for a in audio_results)
+    print(f"  Rewrote {changed} openings; runtime now {total_duration / 60:.1f} min")
+
     # 5. Grid + video + thumbnail
     print("\n[5/6] Rendering grid, assembling video + thumbnail...")
     # The grid uses only the items that will actually appear in it (first

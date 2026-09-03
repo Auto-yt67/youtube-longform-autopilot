@@ -140,6 +140,83 @@ def generate_additional_segments(topic: dict, existing_names: list, extra_count:
     return json.loads(content)["segments"]
 
 
+TRANSITIONS_PROMPT = """You are adding smooth spoken transitions to a car video script.
+Below is the FINAL ordered list of cars, each with its narration. Rewrite the
+OPENING of each segment (after the first) so it flows naturally from the
+previous car - a short spoken back-reference like "Unlike the [previous car] we
+just saw, this next one...", "While the [previous car] focused on X, this
+one...", or "Following the [previous car], this next car took a different
+path...".
+
+Rules:
+- The FIRST car keeps a clean cold open (no back-reference - nothing precedes it).
+- Every other car opens with a smooth 1-sentence transition that references the
+  PREVIOUS car by name, then continues into that car's own story.
+- Keep the rest of each segment's facts intact - only rework the opening so it
+  connects. Do not add new false facts. Do not repeat the whole previous story.
+- Keep each segment about the same length as before.
+- Vary the transition wording - don't start every one the same way.
+
+The cars in order:
+{car_list}
+
+Respond with ONLY valid JSON, no markdown fences, no preamble - a list of the
+rewritten narration texts in the SAME order:
+{{
+  "scripts": ["rewritten narration for car 1", "rewritten narration for car 2", ...]
+}}
+"""
+
+
+def add_transitions(segments: list) -> list:
+    """
+    Given the FINAL ordered list of segments, rewrite each segment's opening
+    (except the first) to smoothly reference the previous car by name. Returns
+    the segments with updated 'script' fields. Runs as ONE pass after the car
+    list is locked, so back-references always point at the real preceding car
+    even after drops/top-ups/reordering.
+
+    Falls back to the original cold-open scripts if the rewrite fails, so a bad
+    transitions call never breaks the pipeline.
+    """
+    if len(segments) < 2:
+        return segments
+
+    car_list = "\n".join(
+        f"{i+1}. {s['name']}: {s['script']}" for i, s in enumerate(segments)
+    )
+    prompt = TRANSITIONS_PROMPT.format(car_list=car_list)
+
+    try:
+        api_key = os.environ["GROQ_API_KEY"]
+        resp = groq_post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json_body={
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 7000,
+                "reasoning_effort": "low",
+            },
+            timeout=150,
+        )
+        content = _extract_json(resp.json()["choices"][0]["message"]["content"])
+        if not content:
+            raise ValueError("empty transitions response")
+        new_scripts = json.loads(content)["scripts"]
+        if len(new_scripts) != len(segments):
+            raise ValueError(f"got {len(new_scripts)} scripts for {len(segments)} cars")
+    except Exception as e:
+        print(f"  ! transition rewrite failed ({e}) - keeping cold-open scripts")
+        return segments
+
+    for seg, new_text in zip(segments, new_scripts):
+        if isinstance(new_text, str) and new_text.strip():
+            seg["script"] = new_text.strip()
+    return segments
+
+
 if __name__ == "__main__":
     from topic_generator import generate_topic
     topic = generate_topic()
