@@ -24,11 +24,12 @@ from youtube_upload import upload_to_youtube
 
 WORKDIR = Path("run_output") / datetime.now().strftime("%Y%m%d_%H%M%S")
 
-WORDS_PER_MINUTE = 140
-TARGET_MIN_SECONDS = 8 * 60 + 30
-MAX_TOPUP_ROUNDS = 4
+WORDS_PER_MINUTE = 180   # Edge-TTS (Eric) at 1.25x speed - much faster than Piper's ~140.
+                          # Used only for the pre-TTS estimate; the real floor is measured after TTS.
+TARGET_MIN_SECONDS = 8 * 60 + 20  # aim just over 8:00 so the measured result clears 8 min
+MAX_TOPUP_ROUNDS = 6
 SEGMENTS_PER_TOPUP = 3
-MAX_SEGMENTS = 15
+MAX_SEGMENTS = 18  # matches the 6x3 grid cap (grid_renderer.MAX_GRID_ITEMS)
 
 
 def _estimate_seconds(text: str) -> float:
@@ -124,32 +125,83 @@ def run():
         images_by_segment = {new_i: images_by_segment[old_i] for new_i, old_i in enumerate(usable)}
         representative_images = [representative_images[i] for i in usable]
 
-    # Cap to the grid size so the title number, the grid, and the narration all
-    # cover exactly the same set of cars. The grid only holds MAX_GRID_ITEMS in
-    # complete rows; anything beyond that would be narrated but never shown.
-    from grid_renderer import GRID_COLS
-    grid_capacity = min(len(segments) // GRID_COLS * GRID_COLS, MAX_GRID_ITEMS) if len(segments) >= GRID_COLS else len(segments)
-    if grid_capacity and len(segments) > grid_capacity:
-        segments = segments[:grid_capacity]
-        images_by_segment = {i: images_by_segment[i] for i in range(grid_capacity)}
-        representative_images = representative_images[:grid_capacity]
-
-    # Reconcile the title's number to the actual count of cars that survived,
-    # so the thumbnail/grid never say "12" while showing 6.
-    final_count = len(segments)
-    script["title"] = _retitle_to_count(script["title"], final_count)
-    print(f"  Final car count after image sourcing: {final_count}")
-    print(f"  Title reconciled to: {script['title']}")
+    # NOTE: grid-row capping and title reconciliation happen AFTER the measured
+    # 8-minute floor loop below (once the final car count is known), not here.
 
     if not intro_images and images_by_segment.get(0):
         intro_images = images_by_segment[0]
 
-    # 4. Voiceover
-    print("\n[4/6] Generating voiceover (Piper TTS)...")
+    # 4. Voiceover (with a MEASURED 8-minute floor)
+    print("\n[4/6] Generating voiceover (Edge-TTS)...")
     audio_dir = WORKDIR / "audio"
     audio_results = synthesize_segments(segments, script["intro"], script["outro"], audio_dir)
     total_duration = sum(a["duration"] for a in audio_results)
-    print(f"  Total runtime: {total_duration / 60:.1f} min")
+    print(f"  Measured runtime: {total_duration / 60:.1f} min (floor: {TARGET_MIN_SECONDS / 60:.1f} min)")
+
+    # If the REAL measured audio is under the floor, add more cars (with images
+    # + audio) until it clears 8 min or we hit the grid cap. This is the true
+    # guarantee - it works off measured duration, not a word-count estimate.
+    floor_rounds = 0
+    while total_duration < TARGET_MIN_SECONDS and len(segments) < MAX_SEGMENTS and floor_rounds < MAX_TOPUP_ROUNDS:
+        floor_rounds += 1
+        room = MAX_SEGMENTS - len(segments)
+        want = min(SEGMENTS_PER_TOPUP, room)
+        print(f"  Under 8 min by measured audio - adding {want} more car(s) (floor round {floor_rounds})...")
+
+        extra = generate_additional_segments(topic, [s["name"] for s in segments], want)
+
+        # source images + synthesize audio for each new car; keep only ones that
+        # get usable images (same rule as the main segments)
+        for seg in extra:
+            idx = len(segments)
+            out_dir = WORKDIR / "images" / f"seg_{idx:02d}"
+            try:
+                paths = download_images_with_fallback(seg["image_query"], seg["name"], out_dir, limit=4)
+            except Exception as e:
+                print(f"  ! image fetch failed for '{seg['name']}' ({e})")
+                paths = []
+            if not paths:
+                print(f"  ! no images for '{seg['name']}' - skipping this added car")
+                continue
+
+            wav_path = audio_dir / f"segment_{idx:02d}.wav"
+            from tts_engine import synthesize, get_wav_duration
+            synthesize(seg["script"], wav_path)
+            dur = get_wav_duration(wav_path)
+
+            segments.append(seg)
+            images_by_segment[idx] = paths
+            representative_images.append(paths[0])
+            # insert the new segment's audio just before the outro entry
+            audio_results.insert(len(audio_results) - 1,
+                                 {"name": seg["name"], "wav_path": str(wav_path), "duration": dur})
+            total_duration += dur
+
+        print(f"  Measured runtime now: {total_duration / 60:.1f} min ({len(segments)} cars)")
+
+    if total_duration < TARGET_MIN_SECONDS:
+        print(f"  ! Could not reach 8 min even at the {MAX_SEGMENTS}-car cap "
+              f"(got {total_duration / 60:.1f} min) - publishing anyway.")
+
+    # Now that the car count is final, cap to complete grid rows and reconcile
+    # the title number, so grid / title / narration all match exactly.
+    from grid_renderer import GRID_COLS
+    if len(segments) >= GRID_COLS:
+        keep = (len(segments) // GRID_COLS) * GRID_COLS
+        keep = min(keep, MAX_SEGMENTS)
+        if len(segments) > keep:
+            # drop from the end, and drop their audio entries too
+            dropped_names = {s["name"] for s in segments[keep:]}
+            segments = segments[:keep]
+            images_by_segment = {i: images_by_segment[i] for i in range(keep)}
+            representative_images = representative_images[:keep]
+            audio_results = [a for a in audio_results if a["name"] not in dropped_names]
+            total_duration = sum(a["duration"] for a in audio_results)
+
+    final_count = len(segments)
+    script["title"] = _retitle_to_count(script["title"], final_count)
+    print(f"  Final: {final_count} cars, {total_duration / 60:.1f} min")
+    print(f"  Title: {script['title']}")
 
     # 5. Grid + video + thumbnail
     print("\n[5/6] Rendering grid, assembling video + thumbnail...")
@@ -158,15 +210,31 @@ def run():
     # render, so grid and zoom stay perfectly aligned.
     grid_names = [s["name"] for s in segments]
     grid_reps = representative_images
-    # Video's opening grid: no colored accent word (accent stays on the thumbnail only)
-    grid_canvas, cells = render_grid(grid_names, grid_reps, script["title"], accent=False)
+    # Video's opening grid: no colored accent word (accent stays on the thumbnail only).
+    # Use a cutout cache so each car's rembg cutout is built once and reused for
+    # the full grid AND every solo frame (keeps the extra renders cheap).
+    import numpy as np
+    from grid_renderer import render_grid as _render_grid
+    cutout_cache = {}
+    grid_canvas, cells = _render_grid(grid_names, grid_reps, script["title"],
+                                      accent=False, cutout_cache=cutout_cache)
     grid_path = WORKDIR / "grid.png"
     grid_canvas.save(grid_path)
+
+    # Render a "solo" grid per car (only that car's circle drawn) so the video
+    # can cross-fade the neighbors away while zooming in. Reuses cached cutouts.
+    print("  Rendering per-car solo frames for the zoom fade...")
+    solo_grids = []
+    for idx in range(len(cells)):
+        solo_canvas, _ = _render_grid(grid_names, grid_reps, script["title"],
+                                      accent=False, only_index=idx, cutout_cache=cutout_cache)
+        solo_grids.append(np.array(solo_canvas.convert("RGB")))
 
     # Only the segments represented in the grid get a zoom target; any beyond
     # the grid cap still play with their own photos (cell=None -> no zoom).
     video_path = WORKDIR / "final_video.mp4"
-    build_video(segments, audio_results, images_by_segment, str(grid_path), cells, video_path)
+    build_video(segments, audio_results, images_by_segment, str(grid_path), cells,
+                video_path, solo_grids=solo_grids)
 
     thumb_path = WORKDIR / "thumbnail.png"
     build_thumbnail(grid_names, grid_reps, script["title"], thumb_path)
