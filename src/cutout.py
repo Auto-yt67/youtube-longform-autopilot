@@ -81,13 +81,16 @@ def score_subject_shape(img_path: str) -> float:
     aspect = sw / sh
 
     score = 0.0
-    # cars are wide - reward landscape subjects, penalize tall ones (people)
-    if aspect >= 1.4:
-        score += 2.0
-    elif aspect >= 1.0:
-        score += 0.5
+    # cars are distinctly wide - reward clear landscape, penalize square (wheels,
+    # badges) and tall (people, detail shots) more firmly
+    if aspect >= 1.5:
+        score += 2.5            # clearly car-shaped
+    elif aspect >= 1.25:
+        score += 1.0
+    elif aspect >= 1.05:
+        score -= 0.5           # nearly square - often a wheel or badge
     else:
-        score -= 2.0            # taller than wide - likely a person or detail
+        score -= 2.5           # square or tall - wheel, person, or detail
     # subject should fill a good chunk of the frame, not be a distant speck
     if subj_frac >= 0.25:
         score += 1.5
@@ -95,9 +98,13 @@ def score_subject_shape(img_path: str) -> float:
         score += 0.3
     else:
         score -= 2.0            # tiny subject - distant car, likely with clutter
-    # a solid, well-formed subject (not scattered fragments)
-    if coverage >= 0.35:
-        score += 0.5
+    # a solid, well-formed subject (not thin scattered lines like a diagram)
+    if coverage >= 0.45:
+        score += 1.0            # solid body - a real photographed car
+    elif coverage >= 0.30:
+        score += 0.2
+    else:
+        score -= 1.5           # sparse/scattered - likely a diagram or line drawing
     return score
 
 

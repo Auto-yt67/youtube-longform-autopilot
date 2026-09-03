@@ -104,6 +104,15 @@ _BAD_TITLE_KEYWORDS = [
     "door", "mirror", "exhaust", "wing", "spoiler", "rim", "hubcap",
     "gearbox", "transmission", "chassis", "frame", "cutaway", "diagram",
     "brochure", "advertisement", "advert", "poster", "stamp", "sketch",
+    # diagrams / non-photo renderings
+    "blueprint", "drawing", "schematic", "technical", "patent", "svg",
+    "illustration", "rendering", "render", "cad", "wireframe", "line art",
+    "plan", "cross-section", "cross section", "phantom",
+    # more part shots
+    "suspension", "brake", "caliper", "axle", "differential", "radiator",
+    "carburetor", "carburettor", "piston", "camshaft", "cylinder", "valve",
+    "gear", "clutch", "pedal", "console", "vent", "handle", "knob", "switch",
+    "instrument", "odometer", "speedometer", "tachometer", "upholstery",
 ]
 # Softer signals - places where crowds/people are likely in frame.
 _CROWD_TITLE_KEYWORDS = [

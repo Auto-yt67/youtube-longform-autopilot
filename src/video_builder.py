@@ -158,10 +158,11 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
     clips = []
 
     PAUSE_AFTER_INTRO = 1.0  # brief beat on the grid before the first car
+    PAUSE_BETWEEN_CARS = 0.7 # beat on the full grid between one car and the next
     ZOOM_IN_DUR = 0.9
     ZOOM_OUT_DUR = 0.7
-    HOLD_AFTER_ZOOMIN = 0.5   # brief beat once zoomed into the car (before photos)
-    HOLD_BEFORE_ZOOMOUT = 0.5 # brief beat on the zoomed-in circle before pulling back out
+    HOLD_AFTER_ZOOMIN = 0.6   # beat once zoomed into the car (before photos)
+    HOLD_BEFORE_ZOOMOUT = 0.5 # beat on the zoomed-in circle before pulling back out
 
     # --- Intro: hold on the full grid while the intro narration plays ---
     intro_audio = AudioFileClip(audio_results[0]["wav_path"])
@@ -211,6 +212,11 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
         seg_visual = concatenate_videoclips(parts, method="compose") if len(parts) > 1 else parts[0]
         seg_visual = seg_visual.set_duration(seg_dur).set_audio(audio)
         clips.append(seg_visual)
+
+        # brief silent beat on the full grid between cars (not after the last one,
+        # which flows straight into the outro)
+        if i < len(segments) - 1:
+            clips.append(_hold_grid_clip(grid_image_path, PAUSE_BETWEEN_CARS))
 
     # --- Outro: hold on the full grid ---
     outro_audio = AudioFileClip(audio_results[-1]["wav_path"])
