@@ -59,7 +59,7 @@ def search_images(query: str, limit: int = 6) -> list:
                 "gsrnamespace": 6,  # File namespace
                 "gsrlimit": limit * 3,  # over-fetch since some will be filtered out
                 "prop": "imageinfo",
-                "iiprop": "url|extmetadata",
+                "iiprop": "url|extmetadata|size",  # size -> width/height for aspect ratio
                 "iiurlwidth": 1600,
             },
             timeout=30,
@@ -85,6 +85,8 @@ def search_images(query: str, limit: int = 6) -> list:
             "url": info.get("thumburl") or info.get("url"),
             "license": extmeta.get("LicenseShortName", {}).get("value", "unknown"),
             "artist": extmeta.get("Artist", {}).get("value", ""),
+            "width": info.get("width", 0),
+            "height": info.get("height", 0),
         })
         if len(results) >= limit:
             break
@@ -92,16 +94,74 @@ def search_images(query: str, limit: int = 6) -> list:
     return results
 
 
-def download_images(query: str, out_dir: Path, limit: int = 4) -> list:
-    """Search + download images for a segment. Returns list of local file paths.
+# Filename keywords that signal a BAD pick (part shot, detail, or crowd risk).
+# Wikimedia filenames are descriptive, so this catches most non-full-car images.
+_BAD_TITLE_KEYWORDS = [
+    "interior", "dashboard", "dash", "cockpit", "engine", "motor", "wheel",
+    "tire", "tyre", "badge", "logo", "emblem", "grille", "grill", "headlight",
+    "taillight", "tail light", "seat", "steering", "gauge", "dial", "detail",
+    "close-up", "closeup", "close up", "trunk", "boot", "hood", "bonnet",
+    "door", "mirror", "exhaust", "wing", "spoiler", "rim", "hubcap",
+    "gearbox", "transmission", "chassis", "frame", "cutaway", "diagram",
+    "brochure", "advertisement", "advert", "poster", "stamp", "sketch",
+]
+# Softer signals - places where crowds/people are likely in frame.
+_CROWD_TITLE_KEYWORDS = [
+    "show", "salon", "motorshow", "auto show", "expo", "exhibition", "fair",
+    "parade", "rally", "race", "racing", "grand prix", "festival", "meet",
+    "crowd", "people", "driver", "pit", "paddock",
+]
+
+
+def _score_by_title(title: str) -> float:
+    """Score an image by its filename. Negative for part/detail shots and
+    crowd-risk locations, so full-car shots rank higher."""
+    t = title.lower()
+    score = 0.0
+    for kw in _BAD_TITLE_KEYWORDS:
+        if kw in t:
+            score -= 3.0        # strong penalty - almost certainly not a full-car shot
+    for kw in _CROWD_TITLE_KEYWORDS:
+        if kw in t:
+            score -= 1.0        # mild penalty - crowd/people risk
+    return score
+
+
+def _score_by_aspect(width: int, height: int) -> float:
+    """Prefer landscape images - full-car shots are almost always wider than
+    tall. Portrait/square lean toward detail shots or people."""
+    if not width or not height:
+        return 0.0
+    ratio = width / height
+    if ratio >= 1.3:
+        return 2.0              # nicely landscape - typical full-car photo
+    if ratio >= 1.0:
+        return 0.5             # roughly square - neutral
+    return -2.0                # portrait - often a detail shot or a person
+
+
+def _score_image(img: dict) -> float:
+    return _score_by_title(img.get("title", "")) + _score_by_aspect(
+        img.get("width", 0), img.get("height", 0)
+    )
+
+
+
+    """Search + download images for a segment. Returns list of local file paths,
+    ordered best-first by the cheap title/aspect score (full-car shots ranked
+    above part/detail shots and portrait/people images).
     Never raises - a failed search or download just means fewer (or zero) images
     for this segment, not a crashed pipeline."""
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        images = search_images(query, limit=limit)
+        images = search_images(query, limit=limit * 2)  # over-fetch so scoring has choices
     except Exception as e:
         print(f"  ! unexpected error searching '{query}' ({e}) - skipping this segment's images")
         return []
+
+    # rank by the cheap (no-download) score: filename keywords + aspect ratio
+    images.sort(key=_score_image, reverse=True)
+    images = images[:limit]
 
     paths = []
     for i, img in enumerate(images):
@@ -151,17 +211,31 @@ def download_images_with_fallback(primary_query: str, item_name: str,
                                    out_dir: Path, limit: int = 4) -> list:
     """
     Try the primary query, then progressively broader fallbacks, stopping as
-    soon as one yields usable images. Dramatically reduces how often a segment
-    ends up with zero images (which is what caused the grid to show fewer cars
-    than the title claimed).
+    soon as one yields usable images. Then re-rank the downloaded candidates by
+    the rembg subject-shape check so the FIRST path (the one used for the grid
+    circle) is the cleanest full-car shot available.
     """
+    paths = []
     for q in _query_variations(primary_query, item_name):
         paths = download_images(q, out_dir, limit=limit)
         if paths:
             if q != primary_query:
                 print(f"    (used fallback query '{q}' for '{item_name}')")
-            return paths
-    return []
+            break
+    if not paths:
+        return []
+
+    # Shape-check the candidates (downloads already done) and put the best
+    # full-car shot first. Falls back gracefully if scoring errors out.
+    try:
+        from cutout import score_subject_shape
+        scored = sorted(paths, key=lambda p: score_subject_shape(p), reverse=True)
+        if scored and scored[0] != paths[0]:
+            print(f"    (picked a cleaner full-car shot for '{item_name}')")
+        return scored
+    except Exception as e:
+        print(f"    ! shape scoring skipped for '{item_name}' ({e})")
+        return paths
 
 
 if __name__ == "__main__":

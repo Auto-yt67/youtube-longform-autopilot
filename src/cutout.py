@@ -50,6 +50,57 @@ def _trim_to_subject(rgba: Image.Image) -> Image.Image:
     return rgba.crop((x0, y0, x1 + 1, y1 + 1))
 
 
+def score_subject_shape(img_path: str) -> float:
+    """
+    Score how "full-car-shaped" the foreground subject is, using the rembg
+    cutout. A clean full-car shot has a wide (landscape) subject that fills a
+    healthy portion of the frame. Returns a score where higher is better;
+    negative means the subject looks wrong (too tall = likely a person, too
+    small = distant car with clutter/people, nothing detected = unusable).
+
+    This downloads+cuts the image, so it's the most expensive filter - callers
+    should apply the cheap title/aspect scores first and only shape-check the
+    top candidates.
+    """
+    try:
+        src = Image.open(img_path)
+        cut = _trim_to_subject(_remove_bg(src))
+    except Exception:
+        return 0.0  # cutout failed - stay neutral, don't penalize
+
+    import numpy as np
+    alpha = np.array(cut.split()[-1])
+    subj = (alpha > 20)
+    coverage = subj.mean()  # fraction of the trimmed box that's actual subject
+    sw, sh = cut.width, cut.height
+    if sw == 0 or sh == 0:
+        return -3.0
+
+    src_area = max(1, src.width * src.height)
+    subj_frac = (sw * sh) / src_area  # how much of the ORIGINAL image the subject spans
+    aspect = sw / sh
+
+    score = 0.0
+    # cars are wide - reward landscape subjects, penalize tall ones (people)
+    if aspect >= 1.4:
+        score += 2.0
+    elif aspect >= 1.0:
+        score += 0.5
+    else:
+        score -= 2.0            # taller than wide - likely a person or detail
+    # subject should fill a good chunk of the frame, not be a distant speck
+    if subj_frac >= 0.25:
+        score += 1.5
+    elif subj_frac >= 0.10:
+        score += 0.3
+    else:
+        score -= 2.0            # tiny subject - distant car, likely with clutter
+    # a solid, well-formed subject (not scattered fragments)
+    if coverage >= 0.35:
+        score += 0.5
+    return score
+
+
 def make_circle(img_path: str, size: int, cutout: bool = True) -> Image.Image:
     """
     Return an RGBA circle of diameter `size`: off-white fill, black ring, and
