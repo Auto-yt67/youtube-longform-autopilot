@@ -61,11 +61,31 @@ def _zoom_into_cell_clip(grid_img: np.ndarray, cell: dict, duration: float,
     target_h = gh * 0.46
     target_w = target_h * (W / H)
 
-    tx0 = max(0, min(cx - target_w / 2, gw - target_w))
-    ty0 = max(0, min(cy - target_h / 2, gh - target_h))
+    # Center the final window ON the circle - do NOT clamp it inside the image.
+    # For edge/corner cells this means the window can extend past the image
+    # border; those out-of-bounds areas are padded with the grid's white
+    # background so the circle always lands dead-center on screen.
+    tx0 = cx - target_w / 2
+    ty0 = cy - target_h / 2
 
     full_w, full_h = float(gw), float(gh)
+    # the fully-zoomed-out window is the whole image, centered
     fx0, fy0 = 0.0, 0.0
+
+    def _crop_padded(src, wx, wy, ww, wh):
+        """Crop a (wx,wy,ww,wh) window from src, padding out-of-bounds areas
+        with white so the window can extend past the image edge."""
+        x0 = int(round(wx)); y0 = int(round(wy))
+        x1 = int(round(wx + ww)); y1 = int(round(wy + wh))
+        out_w = max(2, x1 - x0); out_h = max(2, y1 - y0)
+        canvas = np.full((out_h, out_w, 3), 255, dtype=np.uint8)  # white pad
+        # region of the source that actually overlaps the window
+        sx0 = max(0, x0); sy0 = max(0, y0)
+        sx1 = min(gw, x1); sy1 = min(gh, y1)
+        if sx1 > sx0 and sy1 > sy0:
+            dx0 = sx0 - x0; dy0 = sy0 - y0
+            canvas[dy0:dy0 + (sy1 - sy0), dx0:dx0 + (sx1 - sx0)] = src[sy0:sy1, sx0:sx1]
+        return canvas
 
     def make_frame(t):
         prog = t / duration if duration > 0 else 1.0
@@ -79,18 +99,11 @@ def _zoom_into_cell_clip(grid_img: np.ndarray, cell: dict, duration: float,
         win_x = fx0 + (tx0 - fx0) * prog
         win_y = fy0 + (ty0 - fy0) * prog
 
-        x0 = int(round(win_x)); y0 = int(round(win_y))
-        x1 = int(round(win_x + win_w)); y1 = int(round(win_y + win_h))
-        x0 = max(0, x0); y0 = max(0, y0)
-        x1 = min(gw, max(x1, x0 + 2)); y1 = min(gh, max(y1, y0 + 2))
-
-        window = grid_img[y0:y1, x0:x1]
+        window = _crop_padded(grid_img, win_x, win_y, win_w, win_h)
 
         if solo_img is not None:
-            # blend the full grid toward the solo (target-only) frame as we zoom
-            solo_window = solo_img[y0:y1, x0:x1]
-            # neighbors are fully gone by ~70% of the way in
-            fade = min(1.0, prog / 0.7)
+            solo_window = _crop_padded(solo_img, win_x, win_y, win_w, win_h)
+            fade = min(1.0, prog / 0.7)  # neighbors gone by ~70% in
             window = (window.astype(np.float32) * (1 - fade)
                       + solo_window.astype(np.float32) * fade).astype(np.uint8)
 

@@ -139,19 +139,30 @@ def run():
     print(f"  Measured runtime: {total_duration / 60:.1f} min (floor: {TARGET_MIN_SECONDS / 60:.1f} min)")
 
     # If the REAL measured audio is under the floor, add more cars (with images
-    # + audio) until it clears 8 min or we hit the grid cap. This is the true
-    # guarantee - it works off measured duration, not a word-count estimate.
+    # + audio) until it clears 8 min AND lands on a complete grid row (so the
+    # final row-cap below never has to drop cars back under 8 min). This is the
+    # true guarantee - it works off measured duration, not a word-count estimate.
+    from grid_renderer import GRID_COLS
+
+    def _needs_more():
+        # keep going if under the time floor, OR if over the floor but sitting
+        # on an incomplete row (round up to the next complete row)
+        on_complete_row = (len(segments) % GRID_COLS == 0)
+        under_floor = total_duration < TARGET_MIN_SECONDS
+        return (under_floor or not on_complete_row) and len(segments) < MAX_SEGMENTS
+
     floor_rounds = 0
-    while total_duration < TARGET_MIN_SECONDS and len(segments) < MAX_SEGMENTS and floor_rounds < MAX_TOPUP_ROUNDS:
+    while _needs_more() and floor_rounds < MAX_TOPUP_ROUNDS * 2:
         floor_rounds += 1
         room = MAX_SEGMENTS - len(segments)
-        want = min(SEGMENTS_PER_TOPUP, room)
-        print(f"  Under 8 min by measured audio - adding {want} more car(s) (floor round {floor_rounds})...")
+        # add enough to reach the next complete row (or the standard batch)
+        to_next_row = (GRID_COLS - (len(segments) % GRID_COLS)) % GRID_COLS
+        want = min(room, max(SEGMENTS_PER_TOPUP, to_next_row) if total_duration < TARGET_MIN_SECONDS else to_next_row or SEGMENTS_PER_TOPUP)
+        want = max(1, want)
+        print(f"  Extending (measured {total_duration/60:.1f} min, {len(segments)} cars) - adding {want} (round {floor_rounds})...")
 
         extra = generate_additional_segments(topic, [s["name"] for s in segments], want)
 
-        # source images + synthesize audio for each new car; keep only ones that
-        # get usable images (same rule as the main segments)
         for seg in extra:
             idx = len(segments)
             out_dir = WORKDIR / "images" / f"seg_{idx:02d}"
@@ -172,7 +183,6 @@ def run():
             segments.append(seg)
             images_by_segment[idx] = paths
             representative_images.append(paths[0])
-            # insert the new segment's audio just before the outro entry
             audio_results.insert(len(audio_results) - 1,
                                  {"name": seg["name"], "wav_path": str(wav_path), "duration": dur})
             total_duration += dur
@@ -183,20 +193,18 @@ def run():
         print(f"  ! Could not reach 8 min even at the {MAX_SEGMENTS}-car cap "
               f"(got {total_duration / 60:.1f} min) - publishing anyway.")
 
-    # Now that the car count is final, cap to complete grid rows and reconcile
-    # the title number, so grid / title / narration all match exactly.
-    from grid_renderer import GRID_COLS
-    if len(segments) >= GRID_COLS:
+    # The floor loop lands on a complete row already; only trim if we stopped
+    # at MAX_SEGMENTS on an incomplete row (rare - would mean images kept
+    # failing). Trimming here can drop under 8 min, but only when we genuinely
+    # ran out of usable cars, so it's the best available outcome.
+    if len(segments) >= GRID_COLS and len(segments) % GRID_COLS != 0:
         keep = (len(segments) // GRID_COLS) * GRID_COLS
-        keep = min(keep, MAX_SEGMENTS)
-        if len(segments) > keep:
-            # drop from the end, and drop their audio entries too
-            dropped_names = {s["name"] for s in segments[keep:]}
-            segments = segments[:keep]
-            images_by_segment = {i: images_by_segment[i] for i in range(keep)}
-            representative_images = representative_images[:keep]
-            audio_results = [a for a in audio_results if a["name"] not in dropped_names]
-            total_duration = sum(a["duration"] for a in audio_results)
+        dropped_names = {s["name"] for s in segments[keep:]}
+        segments = segments[:keep]
+        images_by_segment = {i: images_by_segment[i] for i in range(keep)}
+        representative_images = representative_images[:keep]
+        audio_results = [a for a in audio_results if a["name"] not in dropped_names]
+        total_duration = sum(a["duration"] for a in audio_results)
 
     final_count = len(segments)
     script["title"] = _retitle_to_count(script["title"], final_count)
