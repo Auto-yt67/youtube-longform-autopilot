@@ -157,11 +157,13 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
     grid_img = _load_rgb_array(grid_image_path)
     clips = []
 
-    PAUSE_AFTER_INTRO = 1.0  # brief beat on the grid before the first car
-    PAUSE_BETWEEN_CARS = 0.7 # beat on the full grid between one car and the next
+    PAUSE_AFTER_INTRO = 1.0    # beat on the grid before the first car
+    PAUSE_BETWEEN_CARS = 0.7   # beat on the full grid between one car and the next
+    PAUSE_AFTER_EXPLAIN = 0.5  # SILENT beat on the car after the narration finishes,
+                                # before the transition/zoom-out (lets it breathe)
     ZOOM_IN_DUR = 0.9
     ZOOM_OUT_DUR = 0.7
-    HOLD_AFTER_ZOOMIN = 0.6   # beat once zoomed into the car (before photos)
+    HOLD_AFTER_ZOOMIN = 0.6    # beat once zoomed into the car (before photos)
     HOLD_BEFORE_ZOOMOUT = 0.5 # beat on the zoomed-in circle before pulling back out
 
     # --- Intro: hold on the full grid while the intro narration plays ---
@@ -181,37 +183,38 @@ def build_video(segments, audio_results, images_by_segment, grid_image_path, cel
         solo = solo_grids[i] if (solo_grids and i < len(solo_grids)) else None
 
         if cell:
-            # carve the motion beats from the segment's own duration, scaling
-            # down for very short segments so photos still get screen time
+            # --- narrated portion: sized to the audio, carries the voice ---
             zin = min(ZOOM_IN_DUR, seg_dur * 0.18)
-            zout = min(ZOOM_OUT_DUR, seg_dur * 0.14)
             hold_in = min(HOLD_AFTER_ZOOMIN, seg_dur * 0.09)
             hold_out = min(HOLD_BEFORE_ZOOMOUT, seg_dur * 0.09)
-            photos_dur = max(0.1, seg_dur - zin - hold_in - hold_out - zout)
+            photos_dur = max(0.1, seg_dur - zin - hold_in - hold_out)
 
-            # zoom in, cross-fading neighbors away toward the solo frame
-            parts = [_zoom_into_cell_clip(grid_img, cell, zin, zoom_out=False, solo_img=solo)]
-            # brief pause on the isolated car right after zooming in
-            parts.append(_hold_cell_clip(solo if solo is not None else grid_img, cell, hold_in))
-
+            narrated_parts = [
+                _zoom_into_cell_clip(grid_img, cell, zin, zoom_out=False, solo_img=solo),
+                _hold_cell_clip(solo if solo is not None else grid_img, cell, hold_in),
+            ]
             photos_clip = _segment_photos_clip(photos, photos_dur)
             if photos_clip is not None:
-                parts.append(photos_clip)
+                narrated_parts.append(photos_clip)
             else:
-                parts.append(_hold_cell_clip(solo if solo is not None else grid_img, cell, photos_dur))
+                narrated_parts.append(_hold_cell_clip(solo if solo is not None else grid_img, cell, photos_dur))
+            narrated_parts.append(_hold_cell_clip(solo if solo is not None else grid_img, cell, hold_out))
 
-            # brief hold on the isolated car, then zoom back out (neighbors fade in)
-            parts.append(_hold_cell_clip(solo if solo is not None else grid_img, cell, hold_out))
-            parts.append(_zoom_into_cell_clip(grid_img, cell, zout, zoom_out=True, solo_img=solo))
+            narrated = concatenate_videoclips(narrated_parts, method="compose")
+            narrated = narrated.set_duration(seg_dur).set_audio(audio)
+            clips.append(narrated)
+
+            # --- SILENT pause on the car after the voice finishes explaining ---
+            clips.append(_hold_cell_clip(solo if solo is not None else grid_img, cell, PAUSE_AFTER_EXPLAIN))
+
+            # --- zoom back out (silent), neighbors fade in ---
+            zout = min(ZOOM_OUT_DUR, seg_dur * 0.14)
+            clips.append(_zoom_into_cell_clip(grid_img, cell, zout, zoom_out=True, solo_img=solo))
         else:
             photos_clip = _segment_photos_clip(photos, seg_dur)
-            parts = [photos_clip] if photos_clip is not None else [
-                _cover_fit_clip(grid_image_path, seg_dur)
-            ]
-
-        seg_visual = concatenate_videoclips(parts, method="compose") if len(parts) > 1 else parts[0]
-        seg_visual = seg_visual.set_duration(seg_dur).set_audio(audio)
-        clips.append(seg_visual)
+            seg_visual = photos_clip if photos_clip is not None else _cover_fit_clip(grid_image_path, seg_dur)
+            seg_visual = seg_visual.set_duration(seg_dur).set_audio(audio)
+            clips.append(seg_visual)
 
         # brief silent beat on the full grid between cars (not after the last one,
         # which flows straight into the outro)
