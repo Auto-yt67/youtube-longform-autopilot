@@ -2,11 +2,12 @@ name: Publish Car Professor Video
 
 on:
   schedule:
-    # Fire once a day at 18:00 UTC. GitHub often runs scheduled jobs LATE
-    # (sometimes by hours) and ignores daylight saving, so we do NOT rely on the
-    # exact minute. The guard below accepts a wide New York-time window and a
-    # once-per-day lock, so a late GitHub run still publishes exactly one video.
-    - cron: "0 18 * * *"
+    # Fire once a day at 08:00 UTC (~4am Eastern). The build runs in the early
+    # morning; the pipeline itself schedules the YouTube upload to go public at
+    # 3pm Eastern via publishAt, so publish time is fixed regardless of when
+    # GitHub actually runs the (often-delayed) build. Wide guard window below
+    # tolerates GitHub's scheduling delays.
+    - cron: "0 8 * * *"
   workflow_dispatch: {}   # lets you also trigger it manually from the Actions tab
 
 permissions:
@@ -32,9 +33,9 @@ jobs:
           HOUR=$(TZ=America/New_York date +%H)
           TODAY=$(TZ=America/New_York date +%F)
           LAST=$(cat .last_publish 2>/dev/null || echo "never")
-          # Wide window (1pm-8pm NY) so a late GitHub cron still counts as today's
-          # run; the date check stops a second publish on the same day.
-          if [ "$HOUR" -ge 13 ] && [ "$HOUR" -le 20 ] && [ "$TODAY" != "$LAST" ]; then
+          # Wide window (4am-1pm NY) so a late GitHub cron still builds in time
+          # for the 3pm scheduled publish; the date check stops a second run.
+          if [ "$HOUR" -ge 4 ] && [ "$HOUR" -le 13 ] && [ "$TODAY" != "$LAST" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Publishing today's video (NY hour ${HOUR}, last publish: ${LAST})."
           else
