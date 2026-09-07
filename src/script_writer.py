@@ -217,6 +217,59 @@ def add_transitions(segments: list) -> list:
     return segments
 
 
+def apply_pauses(script: dict) -> dict:
+    """
+    Insert Speechma pause characters at the structural points, per the desired
+    pacing. Speechma reads: ',' = short pause, ';' = medium, '!' = long.
+
+    Placement:
+      - medium (;) before the intro's "let's get into it" line, long (!) after it
+      - medium (;) after each car's name at the start of its segment
+      - long (!) at the end of each car's narration
+      - medium (;) right after a transition sentence leading into the next car
+
+    Done as post-processing (not via the LLM) so the pauses land in exactly the
+    right spots every time, regardless of how the model phrased things.
+    """
+    import re
+
+    # --- intro: medium pause before the "let's get into it" closer, long after ---
+    intro = script.get("intro", "")
+    if intro:
+        m = re.search(r"(let'?s get (?:into it|started)[.!]?)\s*$", intro, flags=re.IGNORECASE)
+        if m:
+            closer = m.group(1).rstrip(".!")
+            intro = intro[:m.start()].rstrip() + f" ; {closer} !"
+        script["intro"] = intro
+
+    # --- each segment ---
+    for i, seg in enumerate(script.get("segments", [])):
+        text = seg.get("script", "").strip()
+        name = seg.get("name", "").strip()
+        if not text:
+            continue
+
+        # medium pause right after the car name if the segment opens with it
+        # (cold-open segments start with the name; transition segments start with
+        # the transition sentence, handled below).
+        if name and text.lower().startswith(name.lower()):
+            rest = text[len(name):].lstrip(" .,;:-")
+            text = f"{name} ; {rest}"
+        else:
+            # transition-style opening: put a medium pause after the first sentence
+            # (the transition) so it separates cleanly from the car's own story.
+            parts = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)
+            if len(parts) == 2:
+                text = f"{parts[0]} ; {parts[1]}"
+
+        # long pause at the end of the car's narration (before the next car)
+        text = text.rstrip()
+        text = re.sub(r"[.!]+$", "", text) + " !"
+        seg["script"] = text
+
+    return script
+
+
 if __name__ == "__main__":
     from topic_generator import generate_topic
     topic = generate_topic()

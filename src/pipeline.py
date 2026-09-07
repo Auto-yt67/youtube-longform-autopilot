@@ -212,30 +212,42 @@ def run():
     print(f"  Title: {script['title']}")
 
     # --- Add smooth back-reference transitions, now that the car order is final ---
-    print("\n[4b/6] Adding smooth transitions between cars...")
-    from script_writer import add_transitions
+    print("\n[4b/6] Adding transitions + pause formatting, re-synthesizing narration...")
+    from script_writer import add_transitions, apply_pauses
     from tts_engine import synthesize, get_wav_duration
-    before = [s["script"] for s in segments]
     segments = add_transitions(segments)
+    script["segments"] = segments
 
-    # Re-synthesize only the segments whose opening actually changed, and update
-    # their audio entries (transitions slightly change length). Intro/outro
-    # audio is untouched. Keeps audio in sync with the new narration.
-    name_to_audio = {a["name"]: a for a in audio_results}
-    changed = 0
+    # Insert Speechma pause characters (,;!) at the structural points. This
+    # touches the intro, every segment, and (implicitly) pacing throughout, so
+    # we re-synthesize ALL narration after applying it - not just changed openings.
+    script = apply_pauses(script)
+    segments = script["segments"]
+
+    # Re-synthesize intro, every segment, and outro with the final
+    # transition+pause text, and rebuild audio_results in the correct order
+    # (intro first, segments in order, outro last) so video timing stays synced.
+    new_audio = []
+
+    intro_wav = audio_dir / "intro.wav"
+    synthesize(script["intro"], intro_wav)
+    new_audio.append({"name": "intro", "wav_path": str(intro_wav),
+                      "duration": get_wav_duration(intro_wav)})
+
     for i, seg in enumerate(segments):
-        if seg["script"] == before[i]:
-            continue  # unchanged (e.g. the first car's clean cold open)
-        changed += 1
         wav_path = audio_dir / f"segment_{i:02d}.wav"
         synthesize(seg["script"], wav_path)
-        dur = get_wav_duration(wav_path)
-        entry = name_to_audio.get(seg["name"])
-        if entry is not None:
-            entry["wav_path"] = str(wav_path)
-            entry["duration"] = dur
+        new_audio.append({"name": seg["name"], "wav_path": str(wav_path),
+                          "duration": get_wav_duration(wav_path)})
+
+    outro_wav = audio_dir / "outro.wav"
+    synthesize(script["outro"], outro_wav)
+    new_audio.append({"name": "outro", "wav_path": str(outro_wav),
+                      "duration": get_wav_duration(outro_wav)})
+
+    audio_results = new_audio
     total_duration = sum(a["duration"] for a in audio_results)
-    print(f"  Rewrote {changed} openings; runtime now {total_duration / 60:.1f} min")
+    print(f"  Re-synthesized {len(segments)} cars + intro/outro; runtime now {total_duration / 60:.1f} min")
 
     # 5. Grid + video + thumbnail
     print("\n[5/6] Rendering grid, assembling video + thumbnail...")
@@ -284,13 +296,27 @@ def run():
     )
     tags = ["cars", "automotive history", "car facts", "Car Professor"]
 
+    # Schedule the video to go public at 3pm Eastern TODAY, regardless of when
+    # this build actually ran (it builds at ~4am). YouTube requires a scheduled
+    # video to be uploaded as 'private'; it auto-flips to public at publishAt.
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    now_et = datetime.now(et)
+    publish_et = now_et.replace(hour=15, minute=0, second=0, microsecond=0)
+    if publish_et <= now_et:
+        # if it's somehow already past 3pm, schedule for 3pm tomorrow
+        publish_et = publish_et + timedelta(days=1)
+    publish_at_iso = publish_et.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"  Scheduling publish for {publish_et.strftime('%Y-%m-%d %H:%M %Z')} ({publish_at_iso})")
+
     url = upload_to_youtube(
         video_path=str(video_path),
         title=script["title"][:100],
         description=description,
         tags=tags,
         thumbnail_path=str(thumb_path),
-        publish_settings={"privacyStatus": "public", "publishAt": None},
+        publish_settings={"privacyStatus": "private", "publishAt": publish_at_iso},
     )
 
     save_used_topic(topic["title"])

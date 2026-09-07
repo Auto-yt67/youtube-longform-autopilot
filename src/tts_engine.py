@@ -1,16 +1,22 @@
 """
 Stage 4: Text-to-speech.
 
-Primary narrator: Edge-TTS (Microsoft Edge's online neural voices) - free, no
-API key, no account, much more natural than Piper. Voice: Eric at 1.5x speed.
+Narrator chain (each falls back to the next if it fails, so a run never dies
+on TTS):
+  1. Speechma (Andrew voice, +7% rate) - free online neural voice, most natural
+  2. Edge-TTS (Eric) - free online neural fallback
+  3. Piper (Bryce) - fully offline, always-works last resort
 
-Fallback: Piper (fully offline, open-source). If an Edge-TTS call fails for any
-reason - network blip, Microsoft changing the endpoint, etc. - that segment
-falls back to Piper so the pipeline always completes rather than crashing.
+Speechma is an UNOFFICIAL endpoint (no official API), so it may break without
+notice or be gated by a captcha that blocks automated requests. The fallback
+chain means if that happens in CI, the pipeline drops to Edge-TTS (and then
+Piper) and still produces a video rather than failing. Watch the run logs: if
+you see "Speechma failed - falling back", that's the captcha/endpoint issue and
+the video will use the Edge (Eric) voice instead.
 
-Both output WAV so the rest of the pipeline (which reads WAV durations for
-audio-driven video timing) is unchanged. Edge-TTS returns MP3, which we convert
-to WAV with ffmpeg (already installed in the workflow for video assembly).
+All engines output WAV so the rest of the pipeline (which reads WAV durations
+for audio-driven video timing) is unchanged. Speechma/Edge return MP3, which we
+convert to WAV with ffmpeg (already installed in the workflow).
 """
 
 import asyncio
@@ -18,14 +24,56 @@ import subprocess
 import wave
 from pathlib import Path
 
-# --- Edge-TTS (primary) ---
-EDGE_VOICE = "en-US-EricNeural"   # chosen narrator
-EDGE_RATE = "+25%"                # 1.25x speed
+import requests
 
-# --- Piper (fallback) ---
+# --- Speechma (primary) ---
+SPEECHMA_URL = "https://speechma.com/com.api/tts-api.php"
+SPEECHMA_VOICE = "voice-108"   # Andrew (English, US, male)
+SPEECHMA_RATE = 7              # +7% speed
+SPEECHMA_PITCH = 0
+SPEECHMA_HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/131.0.6778.140 Safari/537.36"),
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://speechma.com",
+    "Referer": "https://speechma.com/",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+}
+
+# --- Edge-TTS (fallback 1) ---
+EDGE_VOICE = "en-US-EricNeural"
+EDGE_RATE = "+25%"
+
+# --- Piper (fallback 2) ---
 PIPER_VOICE = "en_US-bryce-medium"
 PIPER_VOICE_DIR = Path.home() / ".local" / "share" / "piper-voices"
 PIPER_MODEL_PATH = PIPER_VOICE_DIR / f"{PIPER_VOICE}.onnx"
+
+
+def _speechma_to_mp3(text: str, mp3_path: Path):
+    """Synthesize via Speechma's (unofficial) endpoint. Raises on any failure."""
+    # Speechma strips quotes and converts & -> and; do the same so what we send
+    # matches what the site would send, and keep our pause characters (,;!) intact.
+    clean = text.replace("'", "").replace('"', "").replace("&", "and")
+    payload = {
+        "text": clean,
+        "voice": SPEECHMA_VOICE,
+        "rate": SPEECHMA_RATE,
+        "pitch": SPEECHMA_PITCH,
+    }
+    resp = requests.post(SPEECHMA_URL, json=payload, headers=SPEECHMA_HEADERS, timeout=60)
+    resp.raise_for_status()
+    ctype = resp.headers.get("Content-Type", "")
+    if "audio" not in ctype:
+        # not audio -> almost certainly a captcha/HTML page, treat as failure
+        raise RuntimeError(f"Speechma returned non-audio ({ctype or 'unknown'})")
+    if not resp.content or len(resp.content) < 1000:
+        raise RuntimeError("Speechma returned empty/too-small audio")
+    mp3_path.write_bytes(resp.content)
 
 
 def _edge_to_mp3(text: str, mp3_path: Path):
@@ -61,23 +109,42 @@ def _piper_to_wav(text: str, wav_path: Path):
 
 def synthesize(text: str, out_path: Path):
     """
-    Synthesize text to a WAV file. Tries Edge-TTS (Eric, 1.5x) first; if that
-    fails for any reason, falls back to Piper so the run never dies on TTS.
+    Synthesize text to a WAV file. Tries Speechma (Andrew, +7%) first, then
+    Edge-TTS (Eric), then Piper - so the run never dies on TTS.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mp3_tmp = out_path.with_suffix(".mp3")
+
+    # 1) Speechma
     try:
-        _edge_to_mp3(text, mp3_tmp)
+        _speechma_to_mp3(text, mp3_tmp)
         _mp3_to_wav(mp3_tmp, out_path)
+        return
     except Exception as e:
-        print(f"  ! Edge-TTS failed ({e}) - falling back to Piper for this segment")
-        _piper_to_wav(text, out_path)
+        print(f"  ! Speechma failed ({e}) - falling back to Edge-TTS")
     finally:
         if mp3_tmp.exists():
             try:
                 mp3_tmp.unlink()
             except OSError:
                 pass
+
+    # 2) Edge-TTS
+    try:
+        _edge_to_mp3(text, mp3_tmp)
+        _mp3_to_wav(mp3_tmp, out_path)
+        return
+    except Exception as e:
+        print(f"  ! Edge-TTS failed ({e}) - falling back to Piper")
+    finally:
+        if mp3_tmp.exists():
+            try:
+                mp3_tmp.unlink()
+            except OSError:
+                pass
+
+    # 3) Piper (offline, always works)
+    _piper_to_wav(text, out_path)
 
 
 def get_wav_duration(wav_path: Path) -> float:
