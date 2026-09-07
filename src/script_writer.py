@@ -157,6 +157,24 @@ Rules:
 - Keep each segment about the same length as before.
 - Vary the transition wording - don't start every one the same way.
 
+- IMPORTANT - spell out car MODEL NUMBERS the way a person actually SAYS them,
+  because the voice engine mispronounces raw digits. Use these spoken forms:
+  * Porsche 911 -> "Porsche nine eleven"
+  * BMW E30 -> "BMW E thirty" ; E90 -> "E ninety" ; M3 -> "M three"
+  * Peugeot 205 -> "Peugeot two oh five" ; 911 Turbo -> "nine eleven Turbo"
+  * Audi RS6 -> "Audi R S six" ; Q7 -> "Q seven"
+  * Mercedes 300SL -> "Mercedes three hundred S L" (here "three hundred" is
+    correct because it's said that way) ; 190E -> "one ninety E"
+  * Ferrari F40 -> "F forty" ; 250 GTO -> "two fifty G T O"
+  * Datsun 240Z -> "two forty Z" ; Mazda RX-7 -> "R X seven"
+  General guidance: model numbers like 911, 205, 240 are said as grouped digits
+  ("nine eleven", "two oh five", "two forty"), NOT as full numbers ("nine
+  hundred eleven"). Trims said as hundreds (300SL, 250GTO) keep the hundreds
+  reading. Letters next to numbers are read as letters ("E thirty", "R S six").
+  Years (1963, 1985) stay as normal spoken years - do NOT respell those.
+  Apply this to EVERY mention of a car's number in the narration, including the
+  transition sentence.
+
 The cars in order:
 {car_list}
 
@@ -245,22 +263,17 @@ def apply_pauses(script: dict) -> dict:
     # --- each segment ---
     for i, seg in enumerate(script.get("segments", [])):
         text = seg.get("script", "").strip()
-        name = seg.get("name", "").strip()
         if not text:
             continue
 
-        # medium pause right after the car name if the segment opens with it
-        # (cold-open segments start with the name; transition segments start with
-        # the transition sentence, handled below).
-        if name and text.lower().startswith(name.lower()):
-            rest = text[len(name):].lstrip(" .,;:-")
-            text = f"{name} ; {rest}"
-        else:
-            # transition-style opening: put a medium pause after the first sentence
-            # (the transition) so it separates cleanly from the car's own story.
-            parts = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)
-            if len(parts) == 2:
-                text = f"{parts[0]} ; {parts[1]}"
+        # medium pause after the opening sentence of the segment. For the first
+        # car that opening is essentially its name/intro; for later cars it's the
+        # transition sentence. Splitting on the first sentence boundary works for
+        # both, and is robust to the phonetic number rewrite (which changes the
+        # exact wording of the name, so an exact-name match would be unreliable).
+        parts = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)
+        if len(parts) == 2:
+            text = f"{parts[0]} ; {parts[1]}"
 
         # long pause at the end of the car's narration (before the next car)
         text = text.rstrip()
